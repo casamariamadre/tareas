@@ -1,0 +1,16 @@
+{
+  "name": "Necesidades y mantenimiento",
+  "short_name": "Necesidades",
+  "description": "Lista de necesidades y tareas de mantenimiento de la casa",
+  "lang": "es",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#F2EDE8",
+  "theme_color": "#7A1D0B",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
