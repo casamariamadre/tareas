@@ -3,8 +3,8 @@
   'use strict';
   var C = window.CONFIG || {};
   var DEMO = !C.API_URL;
-  var VERSION = '1.0.0';
-  var S = { pin: null, quien: null, datos: null, sinConexion: false, pinRequerido: false,
+  var VERSION = '1.1.0';
+  var S = { pin: null, quien: null, datos: null, sinConexion: false,
             f: { estado: 'abiertas', cat: '', esp: '', texto: '', soloUrg: false }, textoHechas: '' };
   var $ = function (s, el) { return (el || document).querySelector(s); };
   var $$ = function (s, el) { return Array.prototype.slice.call((el || document).querySelectorAll(s)); };
@@ -14,7 +14,7 @@
   var LISTAS = {
     espacios: { titulo: 'Espacios', uno: 'espacio', extra: true },
     categorias: { titulo: 'Categorías', uno: 'categoría' },
-    responsables: { titulo: 'Responsables', uno: 'responsable' }
+    personas: { titulo: 'Personas', uno: 'persona' }
   };
   var ICO = {
     editar: '<svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/></svg>',
@@ -65,24 +65,27 @@
 
   // ---------------- Comunicación con Google (o demostración) ----------------
   var demoListo = null;
+  var PIN_DEMO = '1234';
   function cargarScript(src) {
     return new Promise(function (ok, ko) { var s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = function () { ko(new Error('No se encuentra el archivo ' + src + '. ¿Se subió la carpeta «demo» a GitHub?')); }; document.head.appendChild(s); });
   }
   function prepararDemo() {
     if (!demoListo) {
       demoListo = cargarScript('demo/gas-mock.js').then(function () { return cargarScript('demo/codigo.js'); }).then(function () {
+        window.PIN = PIN_DEMO;
+        window.configurar(); // crea las pestañas que falten (no borra datos)
         if (!lsGet('demoIniciada')) {
           window.__GAS_RESET__ && window.__GAS_RESET__();
           window.configurar();
-          var p = function (t) { return window.atender({ quien: 'Ejemplo', accion: 'guardarTarea', datos: { tarea: t } }); };
+          var p = function (t) { return window.atender({ pin: PIN_DEMO, quien: 'Gema', accion: 'guardarTarea', datos: { tarea: t } }); };
           var r;
           p({ titulo: 'Grifo del lavabo gotea', espacioId: 'E005', lugar: 'Baño planta baja, junto al comedor', categoriaId: 'C001', prioridad: 'Alta', urgente: true, limite: sumaDias(hoyTxt(), 2), descripcion: 'Gotea aunque se cierre del todo. Puede ser la zapata.' });
           p({ titulo: 'Fluorescente fundido', espacioId: 'E008', lugar: 'Pasillo de la primera planta', categoriaId: 'C002', prioridad: 'Media' });
           p({ titulo: 'Pintar la pared con humedad', espacioId: 'E003', lugar: 'Sala grande', categoriaId: 'C003', prioridad: 'Baja', estado: 'Esperando', notas: 'Esperando a que seque antes de pintar.' });
           p({ titulo: 'Comprar bombillas y pilas', espacioId: 'E011', categoriaId: 'C010', prioridad: 'Media', limite: sumaDias(hoyTxt(), -1) });
-          p({ titulo: 'Revisar extintores', espacioId: 'E001', categoriaId: 'C009', prioridad: 'Alta', estado: 'En curso', limite: sumaDias(hoyTxt(), 10) });
+          p({ titulo: 'Revisar extintores', espacioId: 'E001', categoriaId: 'C009', prioridad: 'Alta', estado: 'En curso', responsable: 'Carlos', limite: sumaDias(hoyTxt(), 10) });
           r = p({ titulo: 'Engrasar la puerta de la capilla', espacioId: 'E002', categoriaId: 'C004', prioridad: 'Baja' });
-          if (r && r.ok) window.atender({ quien: 'Ejemplo', accion: 'cambiarEstado', datos: { id: r.datos.id, estado: 'Hecha' } });
+          if (r && r.ok) window.atender({ pin: PIN_DEMO, quien: 'Gema', accion: 'cambiarEstado', datos: { id: r.datos.id, estado: 'Hecha' } });
           lsSet('demoIniciada', true);
         }
       });
@@ -127,6 +130,7 @@
     return api('inicial').then(function () { if (!editando() && $('#modal').hidden) pintar(); })
       .catch(function (e) {
         if (e.codigo === 'CLAVE') return salir('El PIN ha cambiado. Vuelve a entrar.');
+        if (e.codigo === 'PERSONA' || e.codigo === 'SIN_PIN') return salir(e.message);
         var c = lsGet('cache');
         if (e.red && c) { S.datos = c.datos; S.sinConexion = true; avisoConexion(); if (!editando()) pintar(); }
         else if (!silencioso) toast(e.message, true);
@@ -137,7 +141,10 @@
     if (S.sinConexion) { toast('Sin conexión: no se pueden guardar cambios ahora.', true); return Promise.reject(new Error('sin conexión')); }
     cargando(true);
     return api(accion, datos).then(function (d) { if (msg) toast(msg); return d; })
-      .catch(function (e) { if (e.codigo !== 'EN_USO') toast(e.message, true); throw e; })
+      .catch(function (e) {
+        if (e.codigo === 'CLAVE' || e.codigo === 'PERSONA') { cerrarModal(); salir(e.codigo === 'CLAVE' ? 'El PIN ha cambiado. Vuelve a entrar.' : e.message); throw e; }
+        if (e.codigo !== 'EN_USO') toast(e.message, true); throw e;
+      })
       .then(function (d) { cargando(false); return d; }, function (e) { cargando(false); throw e; });
   }
 
@@ -204,37 +211,47 @@
     document.body.setAttribute('data-vista', 'login');
     $('#menu').hidden = true; $('#btnRecargar').hidden = true;
     $('#tituloVista').textContent = 'Acceso';
-    var c = lsGet('cache');
-    var nombres = c && c.datos ? (c.datos.responsables || []).filter(function (r) { return r.activo; }).map(function (r) { return r.nombre; }) : [];
+    var elegido = lsGet('quien') || '';
     vista.innerHTML =
       '<div class="login"><img class="logo" src="icons/icon-192.png" alt="">' +
       '<h1>' + esc(C.NOMBRE_CASA || 'Casa') + '</h1><p class="sub">' + esc(C.SUBTITULO || 'Necesidades y mantenimiento') + '</p>' +
-      '<div class="tarjeta"><label class="campo"><span>Tu nombre</span><input class="entrada" id="lNombre" list="lNombres" autocomplete="name" placeholder="Para saber quién apunta cada cosa" value="' + esc(lsGet('quien') || '') + '"></label>' +
-      '<datalist id="lNombres">' + nombres.map(function (n) { return '<option value="' + esc(n) + '">'; }).join('') + '</datalist>' +
-      '<label class="campo" id="lPinCampo" hidden><span>PIN de la casa</span><input class="entrada" id="lPin" type="password" inputmode="numeric" autocomplete="current-password" placeholder="PIN común"></label>' +
+      '<div class="tarjeta"><label class="campo"><span>¿Quién eres?</span><select class="entrada" id="lQuien"><option value="">Cargando…</option></select></label>' +
+      '<label class="campo"><span>PIN de la casa</span><input class="entrada" id="lPin" type="password" inputmode="numeric" autocomplete="current-password" placeholder="' + (DEMO ? 'En demostración: ' + PIN_DEMO : 'PIN común') + '"></label>' +
       '<p class="error-txt" id="lError">' + esc(msg || '') + '</p>' +
       '<button class="btn ancho" id="lEntrar" style="margin-top:14px">Entrar</button></div></div>';
-    // ¿Pide PIN el puente?
-    api('ping').then(function (d) { S.pinRequerido = !!d.pinRequerido; $('#lPinCampo') && ($('#lPinCampo').hidden = !S.pinRequerido); })
-      .catch(function () { if ($('#lPinCampo')) $('#lPinCampo').hidden = false; });
+    function rellenar(nombres) {
+      var sel = $('#lQuien'); if (!sel) return;
+      if (elegido && nombres.indexOf(elegido) < 0) elegido = '';
+      sel.innerHTML = '<option value="">— Elige tu nombre —</option>' + nombres.map(function (n) {
+        return '<option' + (n === elegido ? ' selected' : '') + '>' + esc(n) + '</option>';
+      }).join('');
+      if (!nombres.length) $('#lError').textContent = 'No hay personas en la lista. Añádelas en la pestaña «Personas» de la hoja de Google.';
+    }
+    // La lista de personas la da el puente (sin PIN). Si no hay conexión, la última conocida.
+    api('ping').then(function (d) { lsSet('personas', d.personas || []); rellenar(d.personas || []); })
+      .catch(function (e) {
+        var guardadas = lsGet('personas') || [];
+        rellenar(guardadas);
+        if (!guardadas.length && $('#lError')) $('#lError').textContent = e.message;
+      });
     function entrar() {
-      var nombre = $('#lNombre').value.trim(), pin = $('#lPin').value.trim();
-      if (!nombre) return ($('#lError').textContent = 'Escribe tu nombre.');
+      var nombre = $('#lQuien').value, pin = $('#lPin').value.trim();
+      if (!nombre) return ($('#lError').textContent = 'Elige tu nombre.');
+      if (!pin) return ($('#lError').textContent = 'Escribe el PIN.');
       S.quien = nombre; S.pin = pin;
       cargando(true);
       api('inicial').then(function () {
         lsSet('quien', nombre); lsSet('pin', pin);
         if (!location.hash || location.hash === '#/') location.hash = '/lista'; else pintar();
       }).catch(function (e) {
-        S.quien = null;
-        if (e.codigo === 'CLAVE') { $('#lPinCampo').hidden = false; $('#lError').textContent = pin ? 'PIN incorrecto.' : 'Escribe el PIN de la casa.'; }
-        else $('#lError').textContent = e.message || 'No se pudo conectar. Revisa la dirección API_URL de config.js.';
+        S.quien = null; S.pin = null;
+        $('#lError').textContent = e.codigo === 'CLAVE' ? 'PIN incorrecto.' : (e.message || 'No se pudo conectar. Revisa la dirección API_URL de config.js.');
       }).then(function () { cargando(false); });
     }
     $('#lEntrar').onclick = entrar;
-    $('#lNombre').onkeydown = $('#lPin').onkeydown = function (e) { if (e.key === 'Enter') entrar(); };
+    $('#lPin').onkeydown = function (e) { if (e.key === 'Enter') entrar(); };
   }
-  function salir(msg) { lsDel('pin'); lsDel('cache'); S.pin = null; S.quien = null; S.datos = null; pintarLogin(msg); }
+  function salir(msg) { lsDel('pin'); lsDel('cache'); S.pin = null; S.quien = null; S.datos = null; location.hash = ''; pintarLogin(msg); }
 
   // ---------------- Tarjeta de tarea ----------------
   function bloquePrio(t) {
@@ -367,7 +384,7 @@
     var t = id ? tarea(id) : null;
     if (id && !t) { vista.innerHTML = botonVolver() + '<div class="vacio">Esta necesidad ya no existe.</div>'; return enlazarVolver(); }
     var v = t ? JSON.parse(JSON.stringify(t)) : { titulo: '', espacioId: S.f.esp || '', categoriaId: S.f.cat || '', lugar: '', prioridad: 'Media', urgente: false, estado: 'Pendiente', responsable: '', limite: '', descripcion: '', notas: '' };
-    var resp = lista('responsables').filter(function (r) { return r.activo || r.nombre === v.responsable; }).map(function (r) { return r.nombre; });
+    var resp = lista('personas').filter(function (r) { return r.activo || r.nombre === v.responsable; }).map(function (r) { return r.nombre; });
     if (v.responsable && resp.indexOf(v.responsable) < 0) resp.push(v.responsable);
     vista.innerHTML = (t ? botonVolver() : '') +
       '<div class="tarjeta">' +
@@ -411,6 +428,7 @@
     var L = LISTAS[k], items = lista(k);
     return '<details class="tarjeta lista-ed" data-lista="' + k + '"' + (S.abierta === k ? ' open' : '') + '><summary>' + L.titulo + '<small>' + items.length + '</small></summary>' +
       (k === 'espacios' ? '<p class="sub" style="margin:0 0 6px">El <b>código</b> servirá para identificar cada estancia (sistema pendiente de decidir).</p>' : '') +
+      (k === 'personas' ? '<p class="sub" style="margin:0 0 6px">Quién puede entrar en la app (aparece en «¿Quién eres?») y a quién se asignan tareas.</p>' : '') +
       (items.length ? items.map(function (e) {
         var extra = [e.codigo && 'Código ' + e.codigo, e.zona, !e.activo && 'desactivado'].filter(Boolean).join(' · ');
         return '<div class="item' + (e.activo ? '' : ' inactivo') + '"><div class="nom"><b>' + esc(e.nombre) + '</b>' + (extra ? '<small>' + esc(extra) + '</small>' : '') + '</div>' +
@@ -434,7 +452,11 @@
         var el = { id: id || '', nombre: $('#eNombre').value.trim(), activo: $('#eActivo').checked };
         if (L.extra) { el.codigo = $('#eCodigo').value.trim(); el.zona = $('#eZona').value.trim(); }
         if (!el.nombre) { $('#eError').textContent = 'Escribe el nombre.'; return; }
-        guardar('guardarElemento', { lista: k, elemento: el }, 'Guardado').then(function () { cerrar(); S.abierta = k; pintarAjustes(); },
+        var antes = id ? elemento(k, id) : null;
+        guardar('guardarElemento', { lista: k, elemento: el }, 'Guardado').then(function () {
+          if (k === 'personas' && antes && antes.nombre === S.quien && el.nombre !== S.quien) { S.quien = el.nombre; lsSet('quien', el.nombre); }
+          cerrar(); S.abierta = k; pintarAjustes();
+        },
           function (err) { if ($('#eError')) $('#eError').textContent = err.message; });
       });
     setTimeout(function () { $('#eNombre') && $('#eNombre').focus(); }, 50);
@@ -457,12 +479,11 @@
     var aj = S.datos.ajustes || {};
     vista.innerHTML =
       '<div class="tarjeta"><h2>Sesión</h2><div class="dato"><span>Tu nombre</span><span><b>' + esc(S.quien) + '</b></span></div>' +
-      '<p class="sub" style="margin:10px 0">Queda anotado en cada necesidad que apuntes o cambies.</p>' +
-      '<button class="btn borde ancho" id="aNombre">Cambiar mi nombre</button></div>' +
+      '<p class="sub" style="margin:10px 0 0">Queda anotado en cada necesidad que apuntes o cambies. Para entrar como otra persona, cierra la sesión.</p></div>' +
       '<h3>Listas</h3>' + Object.keys(LISTAS).map(htmlLista).join('') +
       (DEMO ? '<details class="tarjeta mant"><summary>Demostración</summary><button class="btn borde ancho" id="aReiniciar">Reiniciar demostración</button></details>' : '') +
       '<button class="btn peligro ancho" id="aSalir">Cerrar sesión en este móvil</button>' +
-      '<p class="sub" style="text-align:center;font-size:12px;margin-top:18px">App ' + VERSION + ' · Puente ' + esc(aj.version || '—') + (DEMO ? ' · demostración' : '') + (aj.pinRequerido ? ' · con PIN' : '') + '</p>';
+      '<p class="sub" style="text-align:center;font-size:12px;margin-top:18px">App ' + VERSION + ' · Puente ' + esc(aj.version || '—') + (DEMO ? ' · demostración' : '') + '</p>';
     S.abierta = null;
     $$('.lista-ed').forEach(function (d) {
       var k = d.dataset.lista;
@@ -470,21 +491,12 @@
       $$('.b-borrar', d).forEach(function (b) { b.onclick = function () { borrarElemento(k, b.dataset.id); }; });
       $('.b-anadir', d).onclick = function () { editarElemento(k, null); };
     });
-    $('#aNombre').onclick = function () {
-      modal('<h2>Tu nombre</h2><label class="campo"><input class="entrada" id="mNombre" value="' + esc(S.quien) + '"></label>' +
-        '<div class="fila-btns"><button class="btn borde" data-r="0">Cancelar</button><button class="btn" data-r="1">Guardar</button></div>',
-        function (e, cerrar) {
-          var b = e.target.closest('[data-r]'); if (!b) return;
-          if (b.dataset.r === '1') { var n = $('#mNombre').value.trim(); if (!n) return; S.quien = n; lsSet('quien', n); }
-          cerrar(); pintarAjustes();
-        });
-    };
     if ($('#aReiniciar')) $('#aReiniciar').onclick = function () {
       confirmar('Se borrarán los datos de demostración de este dispositivo.', 'Reiniciar', true).then(function (ok) {
-        if (!ok) return; window.__GAS_RESET__ && window.__GAS_RESET__(); lsDel('demoIniciada'); lsDel('cache'); location.reload();
+        if (!ok) return; window.__GAS_RESET__ && window.__GAS_RESET__(); lsDel('demoIniciada'); lsDel('cache'); lsDel('personas'); location.reload();
       });
     };
-    $('#aSalir').onclick = function () { confirmar('Tendrás que volver a escribir tu nombre' + (aj.pinRequerido ? ' y el PIN' : '') + ' para entrar.', 'Cerrar sesión', true).then(function (ok) { if (ok) salir(); }); };
+    $('#aSalir').onclick = function () { confirmar('Tendrás que volver a elegir tu nombre y escribir el PIN para entrar.', 'Cerrar sesión', true).then(function (ok) { if (ok) salir(); }); };
   }
 
   // ---------------- Arranque ----------------
@@ -497,7 +509,7 @@
   avisoConexion();
 
   S.quien = lsGet('quien'); S.pin = lsGet('pin');
-  if (S.quien && S.pin !== null) {
+  if (S.quien && S.pin) {
     var c = lsGet('cache');
     if (c) { S.datos = c.datos; pintar(); }
     recargar(!!c);

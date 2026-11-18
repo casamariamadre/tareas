@@ -1,9 +1,9 @@
 /**
  * Necesidades y mantenimiento – Puente entre la app y Google Sheets
  * ---------------------------------------------------------------
- * 1. (Opcional) Escribe un PIN común en PIN. Vacío = se entra sin PIN.
+ * 1. Escribe el PIN común en PIN (obligatorio; sin él la app no deja entrar).
  * 2. Ejecuta una vez la función  configurar  (menú ▶ Ejecutar) y acepta los permisos.
- *    Crea las pestañas Tareas, Espacios, Categorías, Responsables y Registro.
+ *    Crea las pestañas Tareas, Espacios, Categorías, Personas y Registro.
  * 3. Implementar ▸ Nueva implementación ▸ Aplicación web
  *      Ejecutar como: Yo   ·   Quién tiene acceso: Cualquier usuario
  * 4. Copia la URL que termina en /exec y pégala en config.js de la app.
@@ -13,9 +13,9 @@
  */
 
 // ====== AJUSTES (puedes cambiarlos) ======
-var PIN = '';              // PIN común. Ejemplo: '2468'. Vacío = sin PIN (cualquiera con la dirección puede entrar).
+var PIN = '';              // PIN común, OBLIGATORIO. Ejemplo: '2468'. Lo escriben todas las personas al entrar.
 var ZONA = 'Europe/Madrid';
-var VERSION = '1.0.0';
+var VERSION = '1.1.0';
 
 var ESTADOS = ['Pendiente', 'En curso', 'Esperando', 'Hecha'];
 var PRIORIDADES = ['Alta', 'Media', 'Baja'];
@@ -28,15 +28,15 @@ var HOJAS = {
              'Creado por', 'Creado el', 'Modificado por', 'Modificado el', 'Hecha el'],
   'Espacios': ['ID', 'Nombre', 'Código', 'Zona', 'Activo', 'Orden'],
   'Categorías': ['ID', 'Nombre', 'Activo', 'Orden'],
-  'Responsables': ['ID', 'Nombre', 'Activo', 'Orden'],
+  'Personas': ['ID', 'Nombre', 'Activo', 'Orden'],
   'Registro': ['Fecha', 'Quién', 'Acción', 'ID', 'Detalle']
 };
 
-// Listas editables desde la app. «enTareas»: columnas de Tareas que guardan el ID y el nombre.
+// Listas editables desde la app. «personas»: quién puede entrar en la app y a quién se asignan tareas. «enTareas»: columnas de Tareas que guardan el ID y el nombre.
 var LISTAS = {
   espacios:     { hoja: 'Espacios',     pref: 'E', campos: ['nombre', 'codigo', 'zona'], enTareas: ['Espacio ID', 'Espacio'] },
   categorias:   { hoja: 'Categorías',   pref: 'C', campos: ['nombre'],                   enTareas: ['Categoría ID', 'Categoría'] },
-  responsables: { hoja: 'Responsables', pref: 'P', campos: ['nombre'],                   enTareas: null }
+  personas:     { hoja: 'Personas',     pref: 'P', campos: ['nombre'],                   enTareas: null }
 };
 var COLUMNA = { nombre: 'Nombre', codigo: 'Código', zona: 'Zona' };
 
@@ -47,7 +47,7 @@ var INICIALES = {
   categorias: ['Fontanería', 'Electricidad', 'Pintura', 'Carpintería y cerrajería', 'Albañilería',
                'Calefacción y climatización', 'Mobiliario', 'Jardín y exteriores', 'Seguridad',
                'Faltas y compras', 'Otros'],
-  responsables: []
+  personas: ['Viviane', 'Rafael', 'Gema', 'Carlos']
 };
 
 // =====================================================================
@@ -102,9 +102,13 @@ function doPost(e) {
 function atender(pet) {
   try {
     if (!pet) return { ok: false, error: 'Petición no válida.' };
-    if (pet.accion === 'ping') return { ok: true, datos: { version: VERSION, pinRequerido: PIN !== '' } };
-    if (PIN !== '' && String(pet.pin || '') !== PIN) return { ok: false, error: 'PIN incorrecto.', codigo: 'CLAVE' };
-    var quien = texto_(pet.quien, 40) || 'Sin nombre';
+    if (pet.accion === 'ping') return { ok: true, datos: { version: VERSION, personas: personasActivas_() } };
+    if (!PIN) return { ok: false, error: 'Falta poner el PIN en Code.gs (variable PIN).', codigo: 'SIN_PIN' };
+    if (String(pet.pin || '') !== PIN) return { ok: false, error: 'PIN incorrecto.', codigo: 'CLAVE' };
+    var quien = texto_(pet.quien, 80);
+    if (personasActivas_().indexOf(quien) < 0) {
+      return { ok: false, error: (quien ? '«' + quien + '» ya no está en la lista de personas.' : 'Elige quién eres.') + ' Vuelve a entrar.', codigo: 'PERSONA' };
+    }
     var d = pet.datos || {};
     switch (pet.accion) {
       case 'inicial': return { ok: true, datos: estado_() };
@@ -157,8 +161,8 @@ function estado_() {
     }).sort(function (a, b) { return a.orden - b.orden || a.nombre.localeCompare(b.nombre); });
   });
   return {
-    tareas: tareas, espacios: listas.espacios, categorias: listas.categorias, responsables: listas.responsables,
-    ajustes: { version: VERSION, estados: ESTADOS, prioridades: PRIORIDADES, pinRequerido: PIN !== '' }
+    tareas: tareas, espacios: listas.espacios, categorias: listas.categorias, personas: listas.personas,
+    ajustes: { version: VERSION, estados: ESTADOS, prioridades: PRIORIDADES }
   };
 }
 
@@ -225,7 +229,7 @@ function borrarTarea_(id, quien) {
 }
 
 // =====================================================================
-// LISTAS (espacios, categorías, responsables)
+// LISTAS (espacios, categorías, personas)
 // =====================================================================
 function guardarElemento_(lista, e, quien) {
   var L = LISTAS[lista];
@@ -238,6 +242,7 @@ function guardarElemento_(lista, e, quien) {
   })[0];
   if (repetido) throw new Error('Ya existe «' + nombre + '».');
   var o = { 'Nombre': nombre, 'Activo': e.activo === false ? 'No' : 'Sí' };
+  if (lista === 'personas' && e.id && e.activo === false && esQuien_(e.id, quien)) throw new Error('No puedes desactivarte a ti misma/o. Pide a otra persona que lo haga.');
   L.campos.forEach(function (c) { if (c !== 'nombre') o[COLUMNA[c]] = texto_(e[c], 40); });
   if (e.id) {
     var fila = buscarFila_(L.hoja, 'ID', e.id);
@@ -266,6 +271,7 @@ function borrarElemento_(lista, id, quien) {
   var fila = buscarFila_(L.hoja, 'ID', id);
   if (!fila) throw new Error('Ese elemento ya no existe.');
   var antes = leerFila_(L.hoja, fila);
+  if (lista === 'personas' && String(antes['Nombre']) === quien) throw new Error('No puedes borrarte a ti misma/o. Pide a otra persona que lo haga.');
   var usos = filas_('Tareas').filter(function (t) {
     return L.enTareas ? String(t[L.enTareas[0]]) === String(id) : String(t['Responsable']) === String(antes['Nombre']);
   }).length;
@@ -289,6 +295,17 @@ function renombrarEnTareas_(lista, id, viejo, nuevo) {
   }
   var ci = v[0].indexOf(L.enTareas[0]), cn = v[0].indexOf(L.enTareas[1]);
   for (var i = 1; i < v.length; i++) if (String(v[i][ci]) === String(id)) sh.getRange(i + 1, cn + 1).setValue(nuevo);
+}
+
+function personasActivas_() {
+  return filas_('Personas').filter(function (f) { return f['ID'] && f['Nombre'] && f['Activo'] !== 'No'; })
+    .sort(function (a, b) { return (Number(a['Orden']) || 0) - (Number(b['Orden']) || 0); })
+    .map(function (f) { return String(f['Nombre']); });
+}
+
+function esQuien_(id, quien) {
+  var f = filas_('Personas').filter(function (x) { return String(x['ID']) === String(id); })[0];
+  return f && String(f['Nombre']) === quien;
 }
 
 function buscarElemento_(lista, id) {
