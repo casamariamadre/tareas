@@ -58,6 +58,44 @@
               .replace('HH', dos(d.getHours())).replace('mm', dos(d.getMinutes())).replace('ss', dos(d.getSeconds()));
     }
   };
+  // ---- Google Drive simulado (fotos) y propiedades del script ----
+  var CLAVE_D = 'nec:demoDrive';
+  var drive = {};
+  try { drive = JSON.parse((almacen && almacen.getItem(CLAVE_D)) || '{}') || {}; } catch (e) { drive = {}; }
+  drive.c = drive.c || {}; drive.a = drive.a || {}; drive.p = drive.p || {}; drive.n = drive.n || 0;
+  function guardarD() { try { almacen && almacen.setItem(CLAVE_D, JSON.stringify(drive)); } catch (e) { /* sin espacio: queda en memoria */ } }
+  function nid(p) { drive.n++; return p + drive.n + '_' + Math.random().toString(36).slice(2, 8); }
+  function Carpeta(id) { this.id = id; }
+  Carpeta.prototype = {
+    getId: function () { return this.id; },
+    getUrl: function () { return 'demo://carpeta/' + this.id; },
+    isTrashed: function () { return false; },
+    setSharing: function () { return this; },
+    createFolder: function (n) { var id = nid('c'); drive.c[id] = { nombre: n, padre: this.id }; guardarD(); return new Carpeta(id); },
+    createFile: function (b) { var id = nid('a'); drive.a[id] = { nombre: b.name, tipo: b.type, datos: b.bytes, carpeta: this.id, papelera: false }; guardarD(); return new Archivo(id); }
+  };
+  function Archivo(id) { this.id = id; }
+  Archivo.prototype = {
+    getId: function () { return this.id; },
+    setSharing: function () { return this; },
+    moveTo: function (c) { drive.a[this.id].carpeta = c.getId(); guardarD(); return this; },
+    setTrashed: function (b) { drive.a[this.id].papelera = !!b; guardarD(); return this; },
+    getThumbnail: function () { return null; },
+    getBlob: function () { var a = drive.a[this.id]; return { getBytes: function () { return a.datos; }, getContentType: function () { return a.tipo; } }; }
+  };
+  g.DriveApp = {
+    Access: { ANYONE_WITH_LINK: 'ANYONE_WITH_LINK' }, Permission: { VIEW: 'VIEW' },
+    createFolder: function (n) { var id = nid('c'); drive.c[id] = { nombre: n, padre: '' }; guardarD(); return new Carpeta(id); },
+    getFolderById: function (id) { if (!drive.c[id]) throw new Error('No existe la carpeta'); return new Carpeta(id); },
+    getFileById: function (id) { if (!drive.a[id]) throw new Error('No existe el archivo'); return new Archivo(id); }
+  };
+  g.PropertiesService = { getScriptProperties: function () { return {
+    getProperty: function (k) { return drive.p[k] == null ? null : drive.p[k]; },
+    setProperty: function (k, v) { drive.p[k] = String(v); guardarD(); return this; } }; } };
+  g.__DRIVE__ = function () { return drive; };
+  g.Utilities.base64Decode = function (t) { return t; };
+  g.Utilities.base64Encode = function (b) { return b; };
+  g.Utilities.newBlob = function (bytes, type, name) { return { bytes: bytes, type: type, name: name }; };
   g.ContentService = { MimeType: { JSON: 'json' }, createTextOutput: function (t) { return { t: t, setMimeType: function () { return this; } }; } };
-  g.__GAS_RESET__ = function () { datos = {}; orden = []; guardar(); };
+  g.__GAS_RESET__ = function () { datos = {}; orden = []; guardar(); drive = { c: {}, a: {}, p: {}, n: 0 }; guardarD(); };
 })(typeof window !== 'undefined' ? window : globalThis);
