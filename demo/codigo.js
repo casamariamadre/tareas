@@ -19,7 +19,7 @@
 var PIN = '';              // PIN común, OBLIGATORIO. Ejemplo: '2468'. Lo escriben todas las personas al entrar.
 var HOJA_ID = '';          // Solo si el script NO se creó desde la hoja (Extensiones ▸ Apps Script): el ID de la hoja (lo que va entre /d/ y /edit en su dirección).
 var ZONA = 'Europe/Madrid';
-var VERSION = '1.3.0';
+var VERSION = '1.4.0';
 
 var ESTADOS = ['Pendiente', 'En curso', 'Esperando', 'Hecha'];
 var PRIORIDADES = ['Alta', 'Media', 'Baja'];
@@ -29,7 +29,7 @@ var PRIORIDADES = ['Alta', 'Media', 'Baja'];
 var HOJAS = {
   'Tareas': ['ID', 'Título', 'Descripción', 'Categoría ID', 'Categoría', 'Espacio ID', 'Espacio', 'Lugar exacto',
              'Prioridad', 'Urgente', 'Estado', 'Responsable', 'Fecha límite', 'Notas',
-             'Creado por', 'Creado el', 'Modificado por', 'Modificado el', 'Hecha el'],
+             'Creado por', 'Creado el', 'Modificado por', 'Modificado el', 'Hecha el', 'Aviso'],
   'Espacios': ['ID', 'Nombre', 'Código', 'Zona', 'Activo', 'Orden'],
   'Categorías': ['ID', 'Nombre', 'Activo', 'Orden'],
   'Responsables': ['ID', 'Nombre', 'Activo', 'Orden'],
@@ -190,6 +190,7 @@ function atender(pet) {
       case 'guardarTarea': return conBloqueo_(function () { return guardarTarea_(d, quien); });
       case 'cambiarEstado': return conBloqueo_(function () { return cambiarEstado_(d.id, d.estado, quien); });
       case 'borrarTarea': return conBloqueo_(function () { return borrarTarea_(d.id, quien); });
+      case 'vistoTarea': return conBloqueo_(function () { return vistoTarea_(d.id, quien); });
       case 'guardarElemento': return conBloqueo_(function () { return guardarElemento_(d.lista, d.elemento || {}, quien); });
       case 'borrarElemento': return conBloqueo_(function () { return borrarElemento_(d.lista, d.id, quien); });
       case 'guardarProveedor': return conBloqueo_(function () { return guardarProveedor_(d.proveedor || {}, quien); });
@@ -234,7 +235,8 @@ function estado_() {
       prioridad: t['Prioridad'] || 'Media', urgente: t['Urgente'] === 'Sí', estado: t['Estado'] || 'Pendiente',
       responsable: t['Responsable'], limite: fecha_(t['Fecha límite']), notas: t['Notas'],
       creadoPor: t['Creado por'], creadoEl: marca_(t['Creado el']),
-      modificadoPor: t['Modificado por'], modificadoEl: marca_(t['Modificado el']), hechaEl: marca_(t['Hecha el'])
+      modificadoPor: t['Modificado por'], modificadoEl: marca_(t['Modificado el']), hechaEl: marca_(t['Hecha el']),
+      aviso: String(t['Aviso'] || '')
     };
   });
   var listas = {};
@@ -279,6 +281,11 @@ function guardarTarea_(d, quien) {
   if (fila) {
     var antes = leerFila_('Tareas', fila);
     o['Hecha el'] = estado === 'Hecha' ? (antes['Hecha el'] || ahora) : '';
+    if (String(antes['Responsable'] || '') !== o['Responsable']) {
+      o['Aviso'] = (o['Responsable'] && o['Responsable'] !== quien && estado !== 'Hecha') ? quien : '';
+    } else if (estado === 'Hecha') {
+      o['Aviso'] = '';
+    }
     escribirFila_('Tareas', fila, o);
     var cambios = cambiosTarea_(antes, o);
     if (cambios.length) anotar_(t.id, quien, 'cambio', cambios.join('\n'));
@@ -289,6 +296,7 @@ function guardarTarea_(d, quien) {
   var id = nuevoId_();
   o['ID'] = id; o['Creado por'] = quien; o['Creado el'] = ahora;
   o['Hecha el'] = estado === 'Hecha' ? ahora : '';
+  o['Aviso'] = (o['Responsable'] && o['Responsable'] !== quien && estado !== 'Hecha') ? quien : '';
   anadirFila_('Tareas', o);
   anotar_(id, quien, 'alta', 'Tarea apuntada' + (o['Responsable'] ? ' · Responsable: ' + o['Responsable'] : ''));
   registrar_(quien, 'Nueva tarea', id, titulo);
@@ -302,15 +310,27 @@ function cambiarEstado_(id, estado, quien) {
   var antes = leerFila_('Tareas', fila);
   var ahora = ahora_();
   var previo = String(antes['Estado'] || 'Pendiente');
-  escribirFila_('Tareas', fila, {
+  var u = {
     'Estado': estado, 'Modificado por': quien, 'Modificado el': ahora,
     'Hecha el': estado === 'Hecha' ? (antes['Hecha el'] || ahora) : ''
-  });
+  };
+  if (estado === 'Hecha') u['Aviso'] = '';
+  escribirFila_('Tareas', fila, u);
   if (previo !== estado) {
     anotar_(id, quien, 'estado', 'Estado: ' + previo + ' → ' + estado);
     if ((previo === 'Hecha') !== (estado === 'Hecha')) recalcularArchivo_(fotosDeTarea_(id));
   }
   registrar_(quien, 'Estado: ' + estado, id, antes['Título']);
+  return { ok: true, datos: { id: id } };
+}
+
+function vistoTarea_(id, quien) {
+  var fila = buscarFila_('Tareas', 'ID', id);
+  if (!fila) return { ok: true, datos: { id: id } };
+  var t = leerFila_('Tareas', fila);
+  if (String(t['Responsable'] || '') === quien && t['Aviso']) {
+    escribirFila_('Tareas', fila, { 'Aviso': '' });
+  }
   return { ok: true, datos: { id: id } };
 }
 
@@ -671,8 +691,11 @@ function renombrarEnTareas_(lista, id, viejo, nuevo) {
   var sh = libro_().getSheetByName('Tareas');
   var v = sh.getDataRange().getValues();
   if (!L.enTareas) {
-    var cr = v[0].indexOf('Responsable');
-    for (var j = 1; j < v.length; j++) if (String(v[j][cr]) === viejo) sh.getRange(j + 1, cr + 1).setValue(nuevo);
+    var cr = v[0].indexOf('Responsable'), ca = v[0].indexOf('Aviso');
+    for (var j = 1; j < v.length; j++) {
+      if (String(v[j][cr]) === viejo) sh.getRange(j + 1, cr + 1).setValue(nuevo);
+      if (ca >= 0 && String(v[j][ca]) === viejo) sh.getRange(j + 1, ca + 1).setValue(nuevo);
+    }
     return;
   }
   var ci = v[0].indexOf(L.enTareas[0]), cn = v[0].indexOf(L.enTareas[1]);
@@ -747,6 +770,7 @@ function leerFila_(nombre, fila) {
 
 /** Escribe solo las columnas indicadas (por nombre de cabecera), sin tocar las demás. */
 function escribirFila_(nombre, fila, o) {
+  asegurarCabeceras_(nombre);
   var sh = hoja_(nombre), cab = cabecera_(nombre);
   var v = sh.getRange(fila, 1, 1, cab.length).getValues()[0];
   cab.forEach(function (c, i) { if (Object.prototype.hasOwnProperty.call(o, c)) v[i] = o[c]; });
@@ -754,6 +778,7 @@ function escribirFila_(nombre, fila, o) {
 }
 
 function anadirFila_(nombre, o) {
+  asegurarCabeceras_(nombre);
   var cab = cabecera_(nombre);
   hoja_(nombre).appendRow(cab.map(function (c) { return o[c] == null ? '' : o[c]; }));
 }
