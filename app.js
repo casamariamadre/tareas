@@ -1,11 +1,11 @@
-/* Tareas y mantenimiento – tareas de la casa, fotos, seguimiento y agenda de proveedores (v1.3) */
+/* Tareas y mantenimiento – tareas de la casa, fotos, seguimiento y agenda de proveedores (v1.4) */
 (function () {
   'use strict';
   var C = window.CONFIG || {};
   var DEMO = !C.API_URL;
-  var VERSION = '1.3.0';
+  var VERSION = '1.4.0';
   var S = { pin: null, quien: null, datos: null, sinConexion: false,
-            f: { estado: 'abiertas', cat: '', esp: '', texto: '', soloUrg: false }, textoHechas: '',
+            f: { estado: 'abiertas', cat: '', esp: '', texto: '', soloUrg: false, mias: false }, textoHechas: '',
             prov: { texto: '', inactivos: false, abiertos: {} },
             fotosF: 'sin', seg: {}, borrador: {}, driveNoVa: false };
   var $ = function (s, el) { return (el || document).querySelector(s); };
@@ -178,6 +178,23 @@
     var cod = codigoEspacio(t), esp = nombreEspacio(t);
     return [cod ? cod + ' · ' + esp : esp, t.lugar].filter(Boolean).join(' — ');
   }
+  function esNuevaMia(t) { return !!(S.quien && t.estado !== 'Hecha' && t.responsable === S.quien && t.aviso); }
+  function nuevasMias() { return tareas().filter(esNuevaMia); }
+  function textoAvisoAsignadas(lista) {
+    var por = [];
+    lista.forEach(function (t) { if (t.aviso && por.indexOf(t.aviso) < 0) por.push(t.aviso); });
+    var quienes = !por.length ? 'Alguien' : por.length === 1 ? '<b>' + esc(por[0]) + '</b>' :
+      por.slice(0, -1).map(function (x) { return '<b>' + esc(x) + '</b>'; }).join(', ') + ' y <b>' + esc(por[por.length - 1]) + '</b>';
+    var verbo = por.length > 1 ? ' te han asignado ' : ' te ha asignado ';
+    var n = lista.length;
+    return quienes + verbo + '<b>' + n + ' tarea' + (n === 1 ? ' nueva' : 's nuevas') + '</b>';
+  }
+  function actualizarGlobo() {
+    var g = $('#numNuevas'); if (!g) return;
+    var n = nuevasMias().length;
+    g.textContent = n ? String(n) : '';
+    g.hidden = !n;
+  }
 
   // ---------------- Navegación ----------------
   var TITULOS = { lista: 'Pendientes', nueva: 'Nueva necesidad', editar: 'Editar', tarea: 'Necesidad', hechas: 'Hechas', fotos: 'Fotos', proveedores: 'Proveedores', ajustes: 'Ajustes' };
@@ -198,6 +215,7 @@
     if (!S.datos) return;
     var r = ruta();
     $('#menu').hidden = false; $('#btnRecargar').hidden = false;
+    actualizarGlobo();
     $('#tituloVista').textContent = TITULOS[r.vista] || '';
     document.body.setAttribute('data-vista', r.vista);
     $$('.menu button').forEach(function (b) {
@@ -275,6 +293,7 @@
   }
   function etiquetas(t, conCat) {
     var e = '';
+    if (esNuevaMia(t)) e += '<span class="etiqueta nueva">Nueva</span>';
     if (t.estado !== 'Pendiente') e += '<span class="etiqueta ' + claseEstado(t.estado) + '">' + esc(t.estado) + '</span>';
     if (t.urgente && t.prioridad !== 'Alta' && t.estado !== 'Hecha') e += '<span class="etiqueta">Prioridad ' + esc(t.prioridad).toLowerCase() + '</span>';
     if (conCat && nombreCategoria(t)) e += '<span class="etiqueta cat">' + esc(nombreCategoria(t)) + '</span>';
@@ -309,13 +328,16 @@
   function pintarLista() {
     var f = S.f;
     var abiertas = tareas().filter(function (t) { return t.estado !== 'Hecha'; });
+    var nuevas = nuevasMias();
+    var miasCount = abiertas.filter(function (t) { return t.responsable === S.quien; }).length;
     var base = abiertas.filter(function (t) {
-      return (!f.cat || t.categoriaId === f.cat) && (!f.esp || t.espacioId === f.esp) && (!f.soloUrg || t.urgente) && coincide(t, f.texto);
+      return (!f.cat || t.categoriaId === f.cat) && (!f.esp || t.espacioId === f.esp) && (!f.soloUrg || t.urgente) && (!f.mias || t.responsable === S.quien) && coincide(t, f.texto);
     });
     var cuenta = function (e) { return base.filter(function (t) { return e === 'abiertas' || t.estado === e; }).length; };
     var visibles = ordenar(base.filter(function (t) { return f.estado === 'abiertas' || t.estado === f.estado; }));
-    var hayFiltro = f.cat || f.esp || f.soloUrg || f.texto;
+    var hayFiltro = f.cat || f.esp || f.soloUrg || f.mias || f.texto;
     vista.innerHTML =
+      (nuevas.length ? '<button class="aviso-asig" id="fAvisoAsig"><span>' + textoAvisoAsignadas(nuevas) + '</span><small>' + (f.mias ? 'Viendo mis tareas' : 'Ver mis tareas') + '</small></button>' : '') +
       '<div class="buscador">' + ICO.buscar + '<input class="entrada" id="fTexto" type="search" placeholder="Buscar…" value="' + esc(f.texto) + '"></div>' +
       '<div class="segmento cuatro" id="fEstado">' +
       [['abiertas', 'Todas'], ['Pendiente', 'Pendientes'], ['En curso', 'En curso'], ['Esperando', 'Esperando']].map(function (x) {
@@ -323,11 +345,16 @@
       }).join('') + '</div>' +
       '<div class="filtros"><select class="entrada' + (f.esp ? ' activo' : '') + '" id="fEsp">' + opciones('espacios', f.esp, 'Todos los espacios') + '</select>' +
       '<select class="entrada' + (f.cat ? ' activo' : '') + '" id="fCat">' + opciones('categorias', f.cat, 'Todas las categorías') + '</select></div>' +
-      '<div class="resumen"><label class="sub check"><input type="checkbox" id="fUrg"' + (f.soloUrg ? ' checked' : '') + '> Solo urgentes</label>' +
+      '<div class="resumen"><div class="resumen-checks"><label class="sub check"><input type="checkbox" id="fMias"' + (f.mias ? ' checked' : '') + '> Mis tareas' + (miasCount ? ' (' + miasCount + ')' : '') + '</label>' +
+      '<label class="sub check"><input type="checkbox" id="fUrg"' + (f.soloUrg ? ' checked' : '') + '> Solo urgentes</label></div>' +
       (hayFiltro ? '<button class="limpiar" id="fLimpiar">Quitar filtros</button>' : '') + '</div>' +
       (visibles.length ? visibles.map(tarjeta).join('')
         : '<div class="vacio">' + (abiertas.length ? 'Nada con estos filtros.' : '¡Todo al día! No hay necesidades pendientes.') + '</div>');
     var tTexto;
+    if ($('#fAvisoAsig')) $('#fAvisoAsig').onclick = function () {
+      if (nuevas.length === 1) ir('tarea/' + encodeURIComponent(nuevas[0].id));
+      else { S.f.mias = true; S.f.estado = 'abiertas'; pintarLista(); }
+    };
     $('#fTexto').oninput = function () {
       var v = this.value; clearTimeout(tTexto);
       tTexto = setTimeout(function () { S.f.texto = v; pintarLista(); var i = $('#fTexto'); i.focus(); i.setSelectionRange(v.length, v.length); }, 250);
@@ -335,8 +362,9 @@
     $('#fEstado').onclick = function (e) { var b = e.target.closest('button'); if (b) { S.f.estado = b.dataset.e; pintarLista(); } };
     $('#fEsp').onchange = function () { S.f.esp = this.value; pintarLista(); };
     $('#fCat').onchange = function () { S.f.cat = this.value; pintarLista(); };
+    $('#fMias').onchange = function () { S.f.mias = this.checked; pintarLista(); };
     $('#fUrg').onchange = function () { S.f.soloUrg = this.checked; pintarLista(); };
-    if ($('#fLimpiar')) $('#fLimpiar').onclick = function () { S.f = { estado: S.f.estado, cat: '', esp: '', texto: '', soloUrg: false }; pintarLista(); };
+    if ($('#fLimpiar')) $('#fLimpiar').onclick = function () { S.f = { estado: S.f.estado, cat: '', esp: '', texto: '', soloUrg: false, mias: false }; pintarLista(); };
     enlazarTarjetas();
   }
 
@@ -360,6 +388,11 @@
   function pintarDetalle(id) {
     var t = tarea(id);
     if (!t) { vista.innerHTML = botonVolver() + '<div class="vacio">Esta necesidad ya no existe.</div>'; return enlazarVolver(); }
+    if (esNuevaMia(t) && !S.sinConexion) {
+      t.aviso = '';
+      actualizarGlobo();
+      api('vistoTarea', { id: t.id }).catch(function () {});
+    }
     var dato = function (k, v) { return v ? '<div class="dato"><span>' + k + '</span><span>' + v + '</span></div>' : ''; };
     vista.innerHTML = botonVolver() +
       '<div class="tarjeta det ' + clasePrio(t) + '"><h2>' + esc(t.titulo) + '</h2>' + etiquetas(t, false) +
