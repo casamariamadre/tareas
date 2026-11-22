@@ -3,10 +3,10 @@
   'use strict';
   var C = window.CONFIG || {};
   var DEMO = !C.API_URL;
-  var VERSION = '1.2.0';
+  var VERSION = '1.2.1';
   var S = { pin: null, quien: null, datos: null, sinConexion: false,
             f: { estado: 'abiertas', cat: '', esp: '', texto: '', soloUrg: false }, textoHechas: '',
-            prov: { texto: '', servicio: '', inactivos: false } };
+            prov: { texto: '', inactivos: false, abiertos: {} } };
   var $ = function (s, el) { return (el || document).querySelector(s); };
   var $$ = function (s, el) { return Array.prototype.slice.call((el || document).querySelectorAll(s)); };
   var vista = $('#vista');
@@ -473,7 +473,7 @@
     var F = S.prov, todos = proveedores();
     var inactivos = todos.filter(function (p) { return !p.activo; }).length;
     var vis = todos.filter(function (p) {
-      return (p.activo || F.inactivos) && (!F.servicio || p.servicio === F.servicio) && coincideProv(p, F.texto);
+      return (p.activo || F.inactivos) && coincideProv(p, F.texto);
     });
     var grupos = [];
     vis.forEach(function (p) {
@@ -481,14 +481,15 @@
       if (!g) grupos.push(g = { servicio: p.servicio, items: [] });
       g.items.push(p);
     });
-    var serv = servicios();
-    if (F.servicio && serv.indexOf(F.servicio) < 0) F.servicio = '';
+    var buscando = !!F.texto;
     vista.innerHTML =
       '<div class="buscador">' + ICO.buscar + '<input class="entrada" id="pTexto" type="search" placeholder="Buscar empresa, servicio o teléfono…" value="' + esc(F.texto) + '"></div>' +
-      '<div class="filtros uno"><select class="entrada' + (F.servicio ? ' activo' : '') + '" id="pServ"><option value="">Todos los servicios</option>' +
-      serv.map(function (x) { return '<option' + (x === F.servicio ? ' selected' : '') + '>' + esc(x) + '</option>'; }).join('') + '</select></div>' +
       (inactivos ? '<div class="resumen"><label class="sub check"><input type="checkbox" id="pInact"' + (F.inactivos ? ' checked' : '') + '> Ver desactivados (' + inactivos + ')</label></div>' : '') +
-      (grupos.length ? grupos.map(function (g) { return '<h3>' + esc(g.servicio) + '</h3>' + g.items.map(fichaProveedor).join(''); }).join('')
+      (grupos.length ? '<div class="grupos-prov">' + grupos.map(function (g) {
+        var abierto = buscando || F.abiertos[g.servicio];
+        return '<details class="grupo-prov" data-serv="' + esc(g.servicio) + '"' + (abierto ? ' open' : '') + '><summary><span>' + esc(g.servicio) + '</span><small>' + g.items.length + '</small></summary>' +
+          '<div class="grupo-cuerpo">' + g.items.map(fichaProveedor).join('') + '</div></details>';
+      }).join('') + '</div>'
         : '<div class="vacio">' + (todos.length ? 'Ningún proveedor coincide con la búsqueda.' : 'Todavía no hay proveedores apuntados.') + '</div>') +
       '<button class="btn sec ancho" id="pAnadir" style="margin:6px 0 14px">+ Añadir proveedor</button>';
     var tTexto;
@@ -496,14 +497,16 @@
       var v = this.value; clearTimeout(tTexto);
       tTexto = setTimeout(function () { S.prov.texto = v; pintarProveedores(); var i = $('#pTexto'); i.focus(); i.setSelectionRange(v.length, v.length); }, 250);
     };
-    $('#pServ').onchange = function () { S.prov.servicio = this.value; pintarProveedores(); };
+    $$('.grupo-prov').forEach(function (d) {
+      d.addEventListener('toggle', function () { if (!S.prov.texto) S.prov.abiertos[d.dataset.serv] = d.open; });
+    });
     if ($('#pInact')) $('#pInact').onchange = function () { S.prov.inactivos = this.checked; pintarProveedores(); };
     $('#pAnadir').onclick = function () { editarProveedor(null); };
     $$('.p-editar').forEach(function (b) { b.onclick = function () { editarProveedor(b.dataset.id); }; });
     $$('.p-borrar').forEach(function (b) { b.onclick = function () { borrarProveedor(b.dataset.id); }; });
   }
   function editarProveedor(id) {
-    var p = id ? proveedor(id) : { servicio: S.prov.servicio || '', empresa: '', contacto: '', tel1: '', tel2: '', email: '', direccion: '', web: '', notas: '', activo: true };
+    var p = id ? proveedor(id) : { servicio: '', empresa: '', contacto: '', tel1: '', tel2: '', email: '', direccion: '', web: '', notas: '', activo: true };
     if (id && !p) return;
     var campo = function (k, et, max, extra) {
       return '<label class="campo"><span>' + et + '</span><input class="entrada" id="v_' + k + '" maxlength="' + max + '" value="' + esc(p[k]) + '"' + (extra || '') + '></label>';
@@ -528,7 +531,7 @@
         ['servicio', 'empresa', 'contacto', 'tel1', 'tel2', 'email', 'direccion', 'web', 'notas'].forEach(function (k) { d[k] = $('#v_' + k).value.trim(); });
         if (!d.servicio) { $('#vError').textContent = 'Escribe el servicio (ej.: Fontanería).'; return; }
         if (!d.empresa) { $('#vError').textContent = 'Escribe el nombre de la empresa o persona.'; return; }
-        guardar('guardarProveedor', { proveedor: d }, 'Guardado').then(function () { cerrar(); pintarProveedores(); },
+        guardar('guardarProveedor', { proveedor: d }, 'Guardado').then(function () { S.prov.abiertos[d.servicio] = true; cerrar(); pintarProveedores(); },
           function (err) { if ($('#vError')) $('#vError').textContent = err.message; });
       });
     setTimeout(function () { var i = $(id ? '#v_empresa' : '#v_servicio'); i && i.focus(); }, 50);
