@@ -1,12 +1,13 @@
-/* Tareas y mantenimiento – lista de tareas de la casa y agenda de proveedores (v1.2) */
+/* Tareas y mantenimiento – tareas de la casa, fotos, seguimiento y agenda de proveedores (v1.3) */
 (function () {
   'use strict';
   var C = window.CONFIG || {};
   var DEMO = !C.API_URL;
-  var VERSION = '1.2.1';
+  var VERSION = '1.3.0';
   var S = { pin: null, quien: null, datos: null, sinConexion: false,
             f: { estado: 'abiertas', cat: '', esp: '', texto: '', soloUrg: false }, textoHechas: '',
-            prov: { texto: '', inactivos: false, abiertos: {} } };
+            prov: { texto: '', inactivos: false, abiertos: {} },
+            fotosF: 'sin', seg: {}, borrador: {}, driveNoVa: false };
   var $ = function (s, el) { return (el || document).querySelector(s); };
   var $$ = function (s, el) { return Array.prototype.slice.call((el || document).querySelectorAll(s)); };
   var vista = $('#vista');
@@ -24,7 +25,9 @@
     tel: '<svg viewBox="0 0 24 24"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg>',
     correo: '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg>',
     mapa: '<svg viewBox="0 0 24 24"><path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>',
-    web: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>'
+    web: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>',
+    camara: '<svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>',
+    galeria: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>'
   };
 
   // ---------------- Almacenamiento local (con protección) ----------------
@@ -177,7 +180,7 @@
   }
 
   // ---------------- Navegación ----------------
-  var TITULOS = { lista: 'Pendientes', nueva: 'Nueva necesidad', editar: 'Editar', tarea: 'Necesidad', hechas: 'Hechas', proveedores: 'Proveedores', ajustes: 'Ajustes' };
+  var TITULOS = { lista: 'Pendientes', nueva: 'Nueva necesidad', editar: 'Editar', tarea: 'Necesidad', hechas: 'Hechas', fotos: 'Fotos', proveedores: 'Proveedores', ajustes: 'Ajustes' };
   function ruta() {
     var h = location.hash.replace(/^#\/?/, '');
     var seg = h.split('?')[0].split('/');
@@ -200,16 +203,20 @@
     $$('.menu button').forEach(function (b) {
       b.classList.toggle('activo', b.dataset.ir === r.vista || (b.dataset.ir === 'lista' && r.vista === 'tarea'));
     });
-    vista.scrollTop = 0;
+    // Si se vuelve a pintar la misma pantalla (tras guardar o actualizar), se conserva la posición.
+    var misma = S.rutaPintada === location.hash, sc = vista.scrollTop;
+    S.rutaPintada = location.hash;
     switch (r.vista) {
-      case 'tarea': return pintarDetalle(r.id);
-      case 'nueva': return pintarFormulario(null);
-      case 'editar': return pintarFormulario(r.id);
-      case 'hechas': return pintarHechas();
-      case 'proveedores': return pintarProveedores();
-      case 'ajustes': return pintarAjustes();
-      default: return pintarLista();
+      case 'tarea': pintarDetalle(r.id); break;
+      case 'nueva': pintarFormulario(null); break;
+      case 'editar': pintarFormulario(r.id); break;
+      case 'hechas': pintarHechas(); break;
+      case 'fotos': pintarFotos(); break;
+      case 'proveedores': pintarProveedores(); break;
+      case 'ajustes': pintarAjustes(); break;
+      default: pintarLista();
     }
+    vista.scrollTop = misma ? sc : 0;
   }
 
   // ---------------- Acceso ----------------
@@ -274,6 +281,8 @@
     if (t.responsable) e += '<span class="etiqueta persona">' + esc(t.responsable) + '</span>';
     if (t.limite && t.estado !== 'Hecha') e += '<span class="etiqueta ' + (vencida(t) ? 'vencida' : 'fecha') + '">' + (vencida(t) ? 'Venció ' : 'Hasta ') + corta(t.limite) + '</span>';
     if (t.estado === 'Hecha' && t.hechaEl) e += '<span class="etiqueta fecha">' + legible(String(t.hechaEl).slice(0, 10)) + '</span>';
+    var nf = fotosDe(t.id).length;
+    if (nf) e += '<span class="etiqueta foto">' + nf + ' foto' + (nf === 1 ? '' : 's') + '</span>';
     return e ? '<div class="etiquetas">' + e + '</div>' : '';
   }
   function tarjeta(t) {
@@ -367,6 +376,7 @@
       '<div class="tarjeta estado-rapido"><h2>Estado</h2><div class="segmento cuatro" id="dEstado">' +
       ESTADOS.map(function (e) { return '<button data-e="' + e + '" class="e-' + claseEstado(e) + (t.estado === e ? ' activo' : '') + '">' + e + '</button>'; }).join('') +
       '</div></div>' +
+      bloqueFotosTarea(t) + bloqueSeguimiento(t) +
       '<div class="fila-btns" style="margin-bottom:12px"><button class="btn" id="dEditar">Editar</button><button class="btn peligro" id="dBorrar">Borrar</button></div>' +
       '<p class="pie-meta">Apuntada por ' + esc(t.creadoPor || '—') + ' el ' + legible(t.creadoEl) +
       (t.modificadoEl && t.modificadoEl !== t.creadoEl ? '<br>Último cambio: ' + esc(t.modificadoPor) + ', ' + legible(t.modificadoEl) : '') +
@@ -376,6 +386,12 @@
       var b = e.target.closest('button'); if (!b || b.dataset.e === t.estado) return;
       guardar('cambiarEstado', { id: t.id, estado: b.dataset.e }, 'Estado: ' + b.dataset.e).then(function () { pintar(); }, function () {});
     };
+    $('#dFotoCam').onclick = function () {
+      elegirArchivos(true, false).then(function (a) { return subirFotos(a, t.id); }).then(function (ids) { if (ids.length) pintar(); });
+    };
+    $('#dFotoRepo').onclick = function () { modalElegirFotos(t.id); };
+    enlazarSeguimiento(t);
+    enlazarFotos(vista);
     $('#dEditar').onclick = function () { ir('editar/' + encodeURIComponent(t.id)); };
     $('#dBorrar').onclick = function () {
       confirmar('¿Borrar «' + esc(t.titulo) + '»? No se puede deshacer. Si ya está resuelta, mejor márcala como <b>Hecha</b> para que quede en el historial.', 'Borrar', true).then(function (ok) {
@@ -383,6 +399,282 @@
         guardar('borrarTarea', { id: t.id }, 'Borrada').then(function () { ir('lista'); }, function () {});
       });
     };
+  }
+
+  // ---------------- Fotos (repositorio en Google Drive) ----------------
+  var cacheImg = {}, pidiendo = {};
+  function fotos() { return (S.datos && S.datos.fotos) || []; }
+  function foto(id) { return fotos().filter(function (f) { return f.id === id; })[0]; }
+  function fotosDe(tid) { return fotos().filter(function (f) { return f.tareas.indexOf(tid) >= 0; }); }
+  function grupoFoto(f) { return f.archivada ? 'archivadas' : (f.tareas.some(function (x) { return tarea(x); }) ? 'asignadas' : 'sin'); }
+  function urlFoto(f, grande) { return 'https://drive.google.com/thumbnail?id=' + encodeURIComponent(f.archivo) + '&sz=w' + (grande ? 1600 : 400); }
+  function htmlImg(id, grande) { return '<img data-foto="' + esc(id) + '"' + (grande ? ' data-grande="1"' : '') + ' alt="" loading="lazy">'; }
+  /** La imagen a través del script: si Drive no la enseña con el enlace, o en demostración. */
+  function verFoto(id, grande) {
+    var k = id + (grande ? 'g' : 'p');
+    if (cacheImg[k]) return Promise.resolve(cacheImg[k]);
+    if (!pidiendo[k]) pidiendo[k] = api('verFoto', { id: id, grande: !!grande })
+      .then(function (d) { cacheImg[k] = d.data; delete pidiendo[k]; return d.data; }, function (e) { delete pidiendo[k]; throw e; });
+    return pidiendo[k];
+  }
+  function activarImagenes(el) {
+    $$('img[data-foto]', el).forEach(function (img) {
+      if (img.dataset.listo) return;
+      img.dataset.listo = '1';
+      var id = img.dataset.foto, grande = !!img.dataset.grande, f = foto(id), k = id + (grande ? 'g' : 'p');
+      if (cacheImg[k]) { img.src = cacheImg[k]; return; }
+      var porScript = function () {
+        img.onerror = null; img.classList.add('esperando');
+        verFoto(id, grande).then(function (u) { img.src = u; img.classList.remove('esperando'); },
+          function () { img.classList.remove('esperando'); img.classList.add('rota'); });
+      };
+      if (DEMO || !f || S.driveNoVa) return porScript();
+      img.onerror = function () { S.driveNoVa = true; porScript(); };
+      img.src = urlFoto(f, grande);
+    });
+  }
+  /** Reduce la foto en el móvil (lado mayor 1600 px, JPEG) antes de enviarla. */
+  function reducirImagen(archivo) {
+    return new Promise(function (ok, ko) {
+      var url = URL.createObjectURL(archivo), img = new Image();
+      img.onload = function () {
+        var max = 1600, w = img.naturalWidth, h = img.naturalHeight, k = Math.min(1, max / Math.max(w, h));
+        var c = document.createElement('canvas');
+        c.width = Math.round(w * k); c.height = Math.round(h * k);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(url);
+        ok(c.toDataURL('image/jpeg', 0.8));
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); ko(new Error('No se pudo leer la imagen «' + (archivo.name || '') + '».')); };
+      img.src = url;
+    });
+  }
+  function elegirArchivos(camara, varias) {
+    $$('input.selector-foto').forEach(function (x) { x.remove(); });
+    return new Promise(function (ok) {
+      var i = document.createElement('input');
+      i.type = 'file'; i.accept = 'image/*'; i.className = 'selector-foto'; i.hidden = true;
+      if (camara) i.setAttribute('capture', 'environment');
+      if (varias) i.multiple = true;
+      document.body.appendChild(i);
+      i.onchange = function () { var a = Array.prototype.slice.call(i.files || []); i.remove(); ok(a); };
+      i.click();
+    });
+  }
+  /** Sube las fotos una a una. Con tareaId quedan asignadas a esa tarea. Devuelve los ID guardados. */
+  function subirFotos(archivos, tareaId) {
+    if (!archivos.length) return Promise.resolve([]);
+    if (S.sinConexion) { toast('Sin conexión: no se pueden subir fotos ahora.', true); return Promise.resolve([]); }
+    var ids = [], i = 0;
+    function siguiente() {
+      if (i >= archivos.length) return Promise.resolve(ids);
+      var a = archivos[i++];
+      cargando(true);
+      return reducirImagen(a).then(function (b64) {
+        return guardar('subirFoto', { base64: b64, tipo: 'image/jpeg', tareaId: tareaId || '' });
+      }, function (e) { cargando(false); toast(e.message, true); throw e; })
+        .then(function (d) { ids.push(d.id); return siguiente(); }, function () { return ids; });
+    }
+    return siguiente().then(function (r) { if (r.length) toast(r.length === 1 ? 'Foto guardada' : r.length + ' fotos guardadas'); return r; });
+  }
+  function miniatura(f) {
+    var n = f.tareas.filter(function (x) { return tarea(x); }).length;
+    return '<button class="mini-foto" data-ver="' + esc(f.id) + '">' + htmlImg(f.id) +
+      '<span class="pie">' + corta(f.fecha) + (n ? ' · ' + n + ' tarea' + (n === 1 ? '' : 's') : '') + '</span></button>';
+  }
+  function enlazarFotos(el) {
+    $$('[data-ver]', el).forEach(function (b) { b.onclick = function () { modalFoto(b.dataset.ver); }; });
+    activarImagenes(el);
+  }
+  function pintarFotos() {
+    var g = S.fotosF, cuenta = { sin: 0, asignadas: 0, archivadas: 0 };
+    fotos().forEach(function (f) { cuenta[grupoFoto(f)]++; });
+    var vis = fotos().filter(function (f) { return grupoFoto(f) === g; });
+    var ayuda = { sin: 'Fotos que aún no están en ninguna tarea. Toca una para asignarla.',
+                  asignadas: 'Fotos que están en alguna tarea abierta.',
+                  archivadas: 'Fotos de tareas ya hechas (en la carpeta «Archivo» de Drive).' }[g];
+    vista.innerHTML =
+      '<div class="fila-btns" style="margin-bottom:12px"><button class="btn" id="fCam">' + ICO.camara + 'Hacer foto</button>' +
+      '<button class="btn sec" id="fGal">' + ICO.galeria + 'Galería</button></div>' +
+      '<div class="segmento tres" id="fGrupo">' + [['sin', 'Sin asignar'], ['asignadas', 'En tareas'], ['archivadas', 'Archivadas']].map(function (x) {
+        return '<button data-g="' + x[0] + '" class="' + (g === x[0] ? 'activo' : '') + '">' + x[1] + '<small>' + cuenta[x[0]] + '</small></button>';
+      }).join('') + '</div>' +
+      '<p class="sub" style="margin:8px 0 0">' + ayuda + '</p>' +
+      (vis.length ? '<div class="rejilla-fotos">' + vis.map(miniatura).join('') + '</div>' : '<div class="vacio">No hay fotos aquí.</div>');
+    $('#fGrupo').onclick = function (e) { var b = e.target.closest('button'); if (b) { S.fotosF = b.dataset.g; pintarFotos(); } };
+    var tras = function (ids) { if (!ids.length) return; S.fotosF = 'sin'; pintar(); if (ids.length === 1) modalFoto(ids[0]); };
+    $('#fCam').onclick = function () { elegirArchivos(true, false).then(function (a) { return subirFotos(a); }).then(tras); };
+    $('#fGal').onclick = function () { elegirArchivos(false, true).then(function (a) { return subirFotos(a); }).then(tras); };
+    enlazarFotos(vista);
+  }
+  /** Ver una foto en grande, ponerle nota y elegir sus tareas (puede estar en varias). */
+  function modalFoto(id) {
+    var f = foto(id); if (!f) return;
+    var cand = ordenar(tareas().filter(function (t) { return t.estado !== 'Hecha' || f.tareas.indexOf(t.id) >= 0; }));
+    modal('<div class="foto-grande">' + htmlImg(f.id, true) + '</div>' +
+      '<p class="sub" style="margin:8px 0 12px">' + legible(f.fecha) + ' · ' + esc(f.usuario) + (f.archivada ? ' · archivada' : '') + '</p>' +
+      '<label class="campo"><span>Nota</span><input class="entrada" id="ftNota" maxlength="300" placeholder="Ej.: Humedad bajo la ventana" value="' + esc(f.nota) + '"></label>' +
+      '<label class="campo"><span>Tareas de esta foto</span></label>' +
+      (cand.length > 6 ? '<input class="entrada" id="ftBuscar" type="search" placeholder="Buscar tarea…" style="margin:-6px 0 8px">' : '') +
+      (cand.length ? '<div class="lista-check" id="ftTareas">' + cand.map(function (t) {
+        return '<label class="check fila-tarea" data-txt="' + esc(sinAcentos(t.titulo + ' ' + textoLugar(t))) + '"><input type="checkbox" value="' + esc(t.id) + '"' +
+          (f.tareas.indexOf(t.id) >= 0 ? ' checked' : '') + '><span><b>' + esc(t.titulo) + '</b><small>' +
+          esc([textoLugar(t), t.estado === 'Hecha' ? 'hecha' : ''].filter(Boolean).join(' · ')) + '</small></span></label>';
+      }).join('') + '</div>' : '<p class="sub">No hay tareas abiertas.</p>') +
+      '<p class="error-txt" id="ftError"></p>' +
+      '<div class="fila-btns"><button class="btn borde" data-r="0">Cerrar</button><button class="btn" data-r="1">Guardar</button></div>' +
+      '<div class="fila-btns" style="margin-top:10px">' +
+      (DEMO ? '' : '<a class="btn borde mini" href="https://drive.google.com/file/d/' + encodeURIComponent(f.archivo) + '/view" target="_blank" rel="noopener">Abrir en Drive</a>') +
+      '<button class="btn peligro mini" data-r="borrar">' + ICO.borrar + 'Borrar foto</button></div>',
+      function (ev, cerrar) {
+        var b = ev.target.closest('[data-r]'); if (!b) return;
+        if (b.dataset.r === '0') return cerrar();
+        if (b.dataset.r === 'borrar') {
+          var n = f.tareas.filter(function (x) { return tarea(x); }).length;
+          return confirmar('¿Borrar esta foto?' + (n ? ' Está en ' + n + ' tarea' + (n === 1 ? '' : 's') + ' y desaparecerá de ellas.' : '') + ' Irá a la papelera de Drive.', 'Borrar', true).then(function (ok) {
+            if (!ok) return modalFoto(id);
+            guardar('borrarFoto', { id: id }, 'Foto borrada').then(function () { pintar(); }, function () {});
+          });
+        }
+        var ts = $$('#ftTareas input:checked').map(function (x) { return x.value; });
+        guardar('guardarFoto', { id: id, nota: $('#ftNota').value.trim(), tareas: ts }, 'Guardado').then(function () { cerrar(); pintar(); },
+          function (err) { if ($('#ftError')) $('#ftError').textContent = err.message; });
+      });
+    activarImagenes($('#modal'));
+    if ($('#ftBuscar')) $('#ftBuscar').oninput = function () {
+      var q = sinAcentos(this.value);
+      $$('#ftTareas .fila-tarea').forEach(function (l) { l.hidden = q && l.dataset.txt.indexOf(q) < 0; });
+    };
+  }
+  /** Elegir fotos del repositorio para una tarea (primero las sin asignar). */
+  function modalElegirFotos(tid) {
+    var disp = fotos().filter(function (f) { return f.tareas.indexOf(tid) < 0 && !f.archivada; });
+    disp = disp.filter(function (f) { return grupoFoto(f) === 'sin'; }).concat(disp.filter(function (f) { return grupoFoto(f) !== 'sin'; }));
+    var sel = [];
+    modal('<h2>Añadir fotos a la tarea</h2>' +
+      (disp.length ? '<p class="sub" style="margin:0 0 4px">Toca las fotos que quieras añadir.</p><div class="rejilla-fotos elegir">' + disp.map(function (f) {
+        return '<button class="mini-foto" data-elegir="' + esc(f.id) + '">' + htmlImg(f.id) + '<span class="pie">' +
+          (grupoFoto(f) === 'sin' ? 'Sin asignar' : corta(f.fecha) + ' · en otra tarea') + '</span><span class="marca">✓</span></button>';
+      }).join('') + '</div>' : '<p class="sub">No hay fotos en el repositorio para añadir.</p>') +
+      '<button class="btn borde ancho mini" data-r="galeria" style="margin:4px 0 12px">' + ICO.galeria + 'Subir desde la galería</button>' +
+      '<div class="fila-btns"><button class="btn borde" data-r="0">Cancelar</button><button class="btn" data-r="1" id="elOk" disabled>Añadir</button></div>',
+      function (ev, cerrar) {
+        var e = ev.target.closest('[data-elegir]');
+        if (e) {
+          var i = sel.indexOf(e.dataset.elegir);
+          if (i < 0) sel.push(e.dataset.elegir); else sel.splice(i, 1);
+          e.classList.toggle('sel', i < 0);
+          $('#elOk').disabled = !sel.length; $('#elOk').textContent = sel.length ? 'Añadir (' + sel.length + ')' : 'Añadir';
+          return;
+        }
+        var b = ev.target.closest('[data-r]'); if (!b) return;
+        if (b.dataset.r === '0') return cerrar();
+        if (b.dataset.r === 'galeria') { cerrar(); return elegirArchivos(false, true).then(function (a) { return subirFotos(a, tid); }).then(function (ids) { if (ids.length) pintar(); }); }
+        guardar('fotosATarea', { tareaId: tid, fotos: sel }, sel.length === 1 ? 'Foto añadida' : sel.length + ' fotos añadidas').then(function () { cerrar(); pintar(); }, function () {});
+      });
+    activarImagenes($('#modal'));
+  }
+  function bloqueFotosTarea(t) {
+    var fs = fotosDe(t.id);
+    return '<div class="tarjeta"><h2 class="con-num">Fotos<small>' + fs.length + '</small></h2>' +
+      (fs.length ? '<div class="tira-fotos">' + fs.map(function (f) { return '<button class="mini-foto" data-ver="' + esc(f.id) + '">' + htmlImg(f.id) + '</button>'; }).join('') + '</div>'
+        : '<p class="sub" style="margin:0 0 10px">Sin fotos todavía.</p>') +
+      '<div class="fila-btns"><button class="btn sec mini" id="dFotoCam">' + ICO.camara + 'Hacer foto</button>' +
+      '<button class="btn sec mini" id="dFotoRepo">' + ICO.galeria + 'Del repositorio</button></div></div>';
+  }
+
+  // ---------------- Seguimiento (avances de cada tarea, plegados por día) ----------------
+  var DIAS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+  var ICO_SEG = { alta: '＋', estado: '⇄', cambio: '✎', foto: '📷' };
+  function nombreDia(d) {
+    var hoy = hoyTxt();
+    if (d === hoy) return 'Hoy';
+    if (d === sumaDias(hoy, -1)) return 'Ayer';
+    var p = d.split('-'), n = DIAS[new Date(+p[0], +p[1] - 1, +p[2]).getDay()];
+    return n.charAt(0).toUpperCase() + n.slice(1) + ' ' + legible(d);
+  }
+  function seguimientoDe(tid) {
+    return ((S.datos && S.datos.seguimiento) || []).filter(function (e) { return e.tareaId === tid; })
+      .sort(function (a, b) { return b.fecha.localeCompare(a.fecha) || b.id.localeCompare(a.id); });
+  }
+  function entradaSeg(e) {
+    var fs = e.fotos.filter(function (id) { return foto(id); });
+    return '<li class="ent ' + (e.tipo === 'nota' ? 'nota' : 'auto') + '"><span class="hora">' + esc(e.fecha.slice(11, 16)) + '</span>' +
+      '<div class="cuerpo"><b>' + esc(e.usuario) + '</b>' + (ICO_SEG[e.tipo] ? '<span class="ic-seg">' + ICO_SEG[e.tipo] + '</span> ' : '') +
+      (e.texto ? '<span class="txt">' + esc(e.texto) + '</span>' : '') +
+      (fs.length ? '<div class="tira-fotos peq">' + fs.map(function (id) { return '<button class="mini-foto" data-ver="' + esc(id) + '">' + htmlImg(id) + '</button>'; }).join('') + '</div>' : '') +
+      '</div><button class="ent-menu" data-ent="' + esc(e.id) + '" aria-label="Opciones">⋯</button></li>';
+  }
+  function bloqueSeguimiento(t) {
+    var ents = seguimientoDe(t.id), b = S.borrador[t.id] || { texto: '', fotos: [] }, ab = S.seg[t.id] || {}, dias = [];
+    ents.forEach(function (e) {
+      var d = e.fecha.slice(0, 10), g = dias[dias.length - 1];
+      if (!g || g.dia !== d) dias.push(g = { dia: d, items: [] });
+      g.items.push(e);
+    });
+    var adj = b.fotos.filter(function (id) { return foto(id); });
+    return '<div class="tarjeta seg"><h2 class="con-num">Seguimiento<small>' + ents.length + '</small></h2>' +
+      '<div class="seg-nuevo"><textarea class="entrada" id="sTexto" maxlength="2000" placeholder="Añadir avance: qué se ha hecho, qué falta…">' + esc(b.texto) + '</textarea>' +
+      (adj.length ? '<div class="tira-fotos">' + adj.map(function (id) {
+        return '<span class="mini-foto">' + htmlImg(id) + '<button class="quitar" data-quitar="' + esc(id) + '" aria-label="Quitar">×</button></span>';
+      }).join('') + '</div>' : '') +
+      '<div class="seg-acc"><button class="btn borde mini" id="sFoto">' + ICO.camara + 'Foto</button><button class="btn mini" id="sAnotar">Anotar</button></div></div>' +
+      (dias.length ? '<div class="arbol">' + dias.map(function (g, i) {
+        var abierto = ab[g.dia] != null ? ab[g.dia] : i === 0;
+        return '<details class="dia" data-dia="' + g.dia + '"' + (abierto ? ' open' : '') + '><summary><span>' + esc(nombreDia(g.dia)) + '</span><small>' + g.items.length + '</small></summary>' +
+          '<ul>' + g.items.map(entradaSeg).join('') + '</ul></details>';
+      }).join('') + '</div>' : '<p class="sub" style="margin:12px 0 0">Todavía no hay avances.</p>') + '</div>';
+  }
+  function enlazarSeguimiento(t) {
+    var borr = function () { return S.borrador[t.id] || (S.borrador[t.id] = { texto: '', fotos: [] }); };
+    $('#sTexto').oninput = function () { borr().texto = this.value; };
+    $('#sFoto').onclick = function () {
+      elegirArchivos(false, true).then(function (a) { return subirFotos(a); }).then(function (ids) {
+        if (!ids.length) return;
+        borr().fotos = borr().fotos.concat(ids); pintar();
+      });
+    };
+    $$('[data-quitar]', vista).forEach(function (x) {
+      x.onclick = function () { var b = borr(); b.fotos = b.fotos.filter(function (id) { return id !== x.dataset.quitar; }); pintar(); };
+    });
+    $('#sAnotar').onclick = function () {
+      var b = borr();
+      b.texto = $('#sTexto').value.trim();
+      if (!b.texto && !b.fotos.length) { toast('Escribe algo o añade una foto.', true); $('#sTexto').focus(); return; }
+      guardar('anotar', { tareaId: t.id, texto: b.texto, fotos: b.fotos }, 'Anotado').then(function () {
+        delete S.borrador[t.id];
+        (S.seg[t.id] = S.seg[t.id] || {})[hoyTxt()] = true;
+        pintar();
+      }, function () {});
+    };
+    $$('details.dia', vista).forEach(function (d) {
+      d.addEventListener('toggle', function () { (S.seg[t.id] = S.seg[t.id] || {})[d.dataset.dia] = d.open; });
+    });
+    $$('[data-ent]', vista).forEach(function (x) { x.onclick = function () { modalEntrada(x.dataset.ent); }; });
+  }
+  function modalEntrada(id) {
+    var e = ((S.datos && S.datos.seguimiento) || []).filter(function (x) { return x.id === id; })[0];
+    if (!e) return;
+    var nota = e.tipo === 'nota';
+    modal('<h2>' + (nota ? 'Editar avance' : 'Entrada automática') + '</h2>' +
+      '<p class="sub" style="margin:0 0 10px">' + legible(e.fecha) + ' · ' + esc(e.usuario) + '</p>' +
+      (nota ? '<label class="campo"><textarea class="entrada" id="enTexto" maxlength="2000">' + esc(e.texto) + '</textarea></label>'
+        : '<p class="texto-largo">' + esc(e.texto) + '</p>') +
+      '<p class="error-txt" id="enError"></p>' +
+      '<div class="fila-btns"><button class="btn peligro" data-r="borrar">Borrar</button><button class="btn borde" data-r="0">Cerrar</button>' +
+      (nota ? '<button class="btn" data-r="1">Guardar</button>' : '') + '</div>',
+      function (ev, cerrar) {
+        var b = ev.target.closest('[data-r]'); if (!b) return;
+        if (b.dataset.r === '0') return cerrar();
+        if (b.dataset.r === 'borrar') {
+          return confirmar('¿Borrar esta entrada del seguimiento?' + (e.fotos.length ? ' Las fotos siguen en la tarea y en el repositorio.' : ''), 'Borrar', true).then(function (ok) {
+            if (!ok) return modalEntrada(id);
+            guardar('borrarAnotacion', { id: id }, 'Entrada borrada').then(function () { pintar(); }, function () {});
+          });
+        }
+        guardar('editarAnotacion', { id: id, texto: $('#enTexto').value.trim() }, 'Guardado').then(function () { cerrar(); pintar(); },
+          function (err) { if ($('#enError')) $('#enError').textContent = err.message; });
+      });
   }
 
   // ---------------- Formulario (nueva / editar) ----------------
@@ -407,7 +699,7 @@
       resp.map(function (n) { return '<option' + (n === v.responsable ? ' selected' : '') + '>' + esc(n) + '</option>'; }).join('') + '</select></label>' +
       '<label class="campo"><span>Fecha límite</span><input class="entrada" id="nLimite" type="date" value="' + esc(v.limite) + '"></label></div>' +
       '<label class="campo"><span>Descripción</span><textarea class="entrada" id="nDesc" maxlength="2000" placeholder="Detalles, medidas, material necesario…">' + esc(v.descripcion) + '</textarea></label>' +
-      (t ? '<label class="campo"><span>Notas de seguimiento</span><textarea class="entrada" id="nNotas" maxlength="2000" placeholder="Ej.: Llamado al fontanero el lunes">' + esc(v.notas) + '</textarea></label>' : '') +
+      (t ? '<label class="campo"><span>Notas</span><textarea class="entrada" id="nNotas" maxlength="2000" placeholder="Ej.: Llamado al fontanero el lunes">' + esc(v.notas) + '</textarea></label>' : '') +
       '<p class="error-txt" id="nError"></p></div>' +
       '<div class="pie-form"><button class="btn borde" id="nCancelar">Cancelar</button><button class="btn" id="nGuardar">' + (t ? 'Guardar cambios' : 'Apuntar') + '</button></div>';
     enlazarVolver();

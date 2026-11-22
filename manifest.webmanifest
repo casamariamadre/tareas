@@ -1,7 +1,7 @@
 {
   "name": "Tareas y mantenimiento",
   "short_name": "Tareas",
-  "description": "Tareas de mantenimiento de la casa y agenda de proveedores",
+  "description": "Tareas de mantenimiento de la casa, fotos, seguimiento y agenda de proveedores",
   "lang": "es",
   "start_url": "./",
   "scope": "./",
