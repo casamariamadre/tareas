@@ -1,11 +1,12 @@
-/* Necesidades y mantenimiento – lista de tareas de la casa (v1.0) */
+/* Tareas y mantenimiento – lista de tareas de la casa y agenda de proveedores (v1.2) */
 (function () {
   'use strict';
   var C = window.CONFIG || {};
   var DEMO = !C.API_URL;
-  var VERSION = '1.1.0';
+  var VERSION = '1.2.0';
   var S = { pin: null, quien: null, datos: null, sinConexion: false,
-            f: { estado: 'abiertas', cat: '', esp: '', texto: '', soloUrg: false }, textoHechas: '' };
+            f: { estado: 'abiertas', cat: '', esp: '', texto: '', soloUrg: false }, textoHechas: '',
+            prov: { texto: '', servicio: '', inactivos: false } };
   var $ = function (s, el) { return (el || document).querySelector(s); };
   var $$ = function (s, el) { return Array.prototype.slice.call((el || document).querySelectorAll(s)); };
   var vista = $('#vista');
@@ -14,12 +15,16 @@
   var LISTAS = {
     espacios: { titulo: 'Espacios', uno: 'espacio', extra: true },
     categorias: { titulo: 'Categorías', uno: 'categoría' },
-    personas: { titulo: 'Personas', uno: 'persona' }
+    responsables: { titulo: 'Responsables', uno: 'responsable' }
   };
   var ICO = {
     editar: '<svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/></svg>',
     borrar: '<svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>',
-    buscar: '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>'
+    buscar: '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>',
+    tel: '<svg viewBox="0 0 24 24"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg>',
+    correo: '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg>',
+    mapa: '<svg viewBox="0 0 24 24"><path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>',
+    web: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>'
   };
 
   // ---------------- Almacenamiento local (con protección) ----------------
@@ -172,7 +177,7 @@
   }
 
   // ---------------- Navegación ----------------
-  var TITULOS = { lista: 'Pendientes', nueva: 'Nueva necesidad', editar: 'Editar', tarea: 'Necesidad', hechas: 'Hechas', ajustes: 'Ajustes' };
+  var TITULOS = { lista: 'Pendientes', nueva: 'Nueva necesidad', editar: 'Editar', tarea: 'Necesidad', hechas: 'Hechas', proveedores: 'Proveedores', ajustes: 'Ajustes' };
   function ruta() {
     var h = location.hash.replace(/^#\/?/, '');
     var seg = h.split('?')[0].split('/');
@@ -201,6 +206,7 @@
       case 'nueva': return pintarFormulario(null);
       case 'editar': return pintarFormulario(r.id);
       case 'hechas': return pintarHechas();
+      case 'proveedores': return pintarProveedores();
       case 'ajustes': return pintarAjustes();
       default: return pintarLista();
     }
@@ -214,7 +220,7 @@
     var elegido = lsGet('quien') || '';
     vista.innerHTML =
       '<div class="login"><img class="logo" src="icons/icon-192.png" alt="">' +
-      '<h1>' + esc(C.NOMBRE_CASA || 'Casa') + '</h1><p class="sub">' + esc(C.SUBTITULO || 'Necesidades y mantenimiento') + '</p>' +
+      '<h1>' + esc(C.NOMBRE_CASA || 'Casa') + '</h1><p class="sub">' + esc(C.SUBTITULO || 'Tareas y mantenimiento') + '</p>' +
       '<div class="tarjeta"><label class="campo"><span>¿Quién eres?</span><select class="entrada" id="lQuien"><option value="">Cargando…</option></select></label>' +
       '<label class="campo"><span>PIN de la casa</span><input class="entrada" id="lPin" type="password" inputmode="numeric" autocomplete="current-password" placeholder="' + (DEMO ? 'En demostración: ' + PIN_DEMO : 'PIN común') + '"></label>' +
       '<p class="error-txt" id="lError">' + esc(msg || '') + '</p>' +
@@ -225,12 +231,12 @@
       sel.innerHTML = '<option value="">— Elige tu nombre —</option>' + nombres.map(function (n) {
         return '<option' + (n === elegido ? ' selected' : '') + '>' + esc(n) + '</option>';
       }).join('');
-      if (!nombres.length) $('#lError').textContent = 'No hay personas en la lista. Añádelas en la pestaña «Personas» de la hoja de Google.';
+      if (!nombres.length) $('#lError').textContent = 'No hay responsables en la lista. Añádelos en la pestaña «Responsables» de la hoja de Google.';
     }
-    // La lista de personas la da el puente (sin PIN). Si no hay conexión, la última conocida.
-    api('ping').then(function (d) { lsSet('personas', d.personas || []); rellenar(d.personas || []); })
+    // La lista de responsables la da el puente (sin PIN). Si no hay conexión, la última conocida.
+    api('ping').then(function (d) { lsSet('responsables', d.responsables || []); rellenar(d.responsables || []); })
       .catch(function (e) {
-        var guardadas = lsGet('personas') || [];
+        var guardadas = lsGet('responsables') || [];
         rellenar(guardadas);
         if (!guardadas.length && $('#lError')) $('#lError').textContent = e.message;
       });
@@ -384,7 +390,7 @@
     var t = id ? tarea(id) : null;
     if (id && !t) { vista.innerHTML = botonVolver() + '<div class="vacio">Esta necesidad ya no existe.</div>'; return enlazarVolver(); }
     var v = t ? JSON.parse(JSON.stringify(t)) : { titulo: '', espacioId: S.f.esp || '', categoriaId: S.f.cat || '', lugar: '', prioridad: 'Media', urgente: false, estado: 'Pendiente', responsable: '', limite: '', descripcion: '', notas: '' };
-    var resp = lista('personas').filter(function (r) { return r.activo || r.nombre === v.responsable; }).map(function (r) { return r.nombre; });
+    var resp = lista('responsables').filter(function (r) { return r.activo || r.nombre === v.responsable; }).map(function (r) { return r.nombre; });
     if (v.responsable && resp.indexOf(v.responsable) < 0) resp.push(v.responsable);
     vista.innerHTML = (t ? botonVolver() : '') +
       '<div class="tarjeta">' +
@@ -423,12 +429,124 @@
     if (!t) setTimeout(function () { $('#nTitulo') && $('#nTitulo').focus(); }, 50);
   }
 
+  // ---------------- Proveedores (agenda de teléfonos) ----------------
+  function proveedores() { return (S.datos && S.datos.proveedores) || []; }
+  function proveedor(id) { return proveedores().filter(function (p) { return p.id === id; })[0]; }
+  function soloDigitos(s) { return String(s || '').replace(/[^\d+]/g, ''); }
+  function hrefTel(s) { var d = soloDigitos(s); return 'tel:' + (/^\d{9}$/.test(d) ? '+34' + d : d); }
+  function hrefWeb(s) { s = String(s || '').trim(); return /^https?:\/\//i.test(s) ? s : 'https://' + s; }
+  function hrefMapa(s) { return 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(s); }
+  /** Texto con los teléfonos de 9 cifras convertidos en enlaces para llamar. */
+  function conTelefonos(texto) {
+    return esc(texto).replace(/(\+?\d[\d ]{7,14}\d)/g, function (m) {
+      return soloDigitos(m).replace('+', '').length >= 9 ? '<a href="' + hrefTel(m) + '">' + m + '</a>' : m;
+    });
+  }
+  function servicios() {
+    var vistos = [];
+    proveedores().forEach(function (p) { if (p.servicio && vistos.indexOf(p.servicio) < 0) vistos.push(p.servicio); });
+    return vistos;
+  }
+  function coincideProv(p, texto) {
+    if (!texto) return true;
+    var q = sinAcentos(texto), qd = texto.replace(/\D/g, '');
+    var todo = [p.servicio, p.empresa, p.contacto, p.tel1, p.tel2, p.email, p.direccion, p.web, p.notas].join(' ');
+    return sinAcentos(todo).indexOf(q) >= 0 || (qd.length >= 3 && todo.replace(/\D/g, '').indexOf(qd) >= 0);
+  }
+  function fichaProveedor(p) {
+    var b = '';
+    [p.tel1, p.tel2].forEach(function (t) { if (t) b += '<a class="btn mini llamar" href="' + esc(hrefTel(t)) + '">' + ICO.tel + esc(t) + '</a>'; });
+    if (p.email) b += '<a class="btn mini sec" href="mailto:' + esc(p.email) + '">' + ICO.correo + 'Correo</a>';
+    if (p.direccion) b += '<a class="btn mini sec" href="' + esc(hrefMapa(p.direccion)) + '" target="_blank" rel="noopener">' + ICO.mapa + 'Mapa</a>';
+    if (p.web) b += '<a class="btn mini sec" href="' + esc(hrefWeb(p.web)) + '" target="_blank" rel="noopener">' + ICO.web + 'Web</a>';
+    return '<div class="tarjeta prov' + (p.activo ? '' : ' inactivo') + '">' +
+      '<div class="prov-cab"><div class="nom"><b>' + esc(p.empresa) + '</b>' +
+      (p.contacto || !p.activo ? '<small>' + esc([p.contacto && 'Contacto: ' + p.contacto, !p.activo && 'desactivado'].filter(Boolean).join(' · ')) + '</small>' : '') + '</div>' +
+      '<div class="acc"><button class="p-editar" data-id="' + esc(p.id) + '" aria-label="Editar">' + ICO.editar + '</button>' +
+      '<button class="p-borrar" data-id="' + esc(p.id) + '" aria-label="Borrar">' + ICO.borrar + '</button></div></div>' +
+      (b ? '<div class="prov-btns">' + b + '</div>' : '') +
+      (p.email ? '<p class="prov-linea">' + esc(p.email) + '</p>' : '') +
+      (p.direccion ? '<p class="prov-linea">' + esc(p.direccion) + '</p>' : '') +
+      (p.notas ? '<p class="prov-nota">' + conTelefonos(p.notas) + '</p>' : '') + '</div>';
+  }
+  function pintarProveedores() {
+    var F = S.prov, todos = proveedores();
+    var inactivos = todos.filter(function (p) { return !p.activo; }).length;
+    var vis = todos.filter(function (p) {
+      return (p.activo || F.inactivos) && (!F.servicio || p.servicio === F.servicio) && coincideProv(p, F.texto);
+    });
+    var grupos = [];
+    vis.forEach(function (p) {
+      var g = grupos.filter(function (x) { return x.servicio === p.servicio; })[0];
+      if (!g) grupos.push(g = { servicio: p.servicio, items: [] });
+      g.items.push(p);
+    });
+    var serv = servicios();
+    if (F.servicio && serv.indexOf(F.servicio) < 0) F.servicio = '';
+    vista.innerHTML =
+      '<div class="buscador">' + ICO.buscar + '<input class="entrada" id="pTexto" type="search" placeholder="Buscar empresa, servicio o teléfono…" value="' + esc(F.texto) + '"></div>' +
+      '<div class="filtros uno"><select class="entrada' + (F.servicio ? ' activo' : '') + '" id="pServ"><option value="">Todos los servicios</option>' +
+      serv.map(function (x) { return '<option' + (x === F.servicio ? ' selected' : '') + '>' + esc(x) + '</option>'; }).join('') + '</select></div>' +
+      (inactivos ? '<div class="resumen"><label class="sub check"><input type="checkbox" id="pInact"' + (F.inactivos ? ' checked' : '') + '> Ver desactivados (' + inactivos + ')</label></div>' : '') +
+      (grupos.length ? grupos.map(function (g) { return '<h3>' + esc(g.servicio) + '</h3>' + g.items.map(fichaProveedor).join(''); }).join('')
+        : '<div class="vacio">' + (todos.length ? 'Ningún proveedor coincide con la búsqueda.' : 'Todavía no hay proveedores apuntados.') + '</div>') +
+      '<button class="btn sec ancho" id="pAnadir" style="margin:6px 0 14px">+ Añadir proveedor</button>';
+    var tTexto;
+    $('#pTexto').oninput = function () {
+      var v = this.value; clearTimeout(tTexto);
+      tTexto = setTimeout(function () { S.prov.texto = v; pintarProveedores(); var i = $('#pTexto'); i.focus(); i.setSelectionRange(v.length, v.length); }, 250);
+    };
+    $('#pServ').onchange = function () { S.prov.servicio = this.value; pintarProveedores(); };
+    if ($('#pInact')) $('#pInact').onchange = function () { S.prov.inactivos = this.checked; pintarProveedores(); };
+    $('#pAnadir').onclick = function () { editarProveedor(null); };
+    $$('.p-editar').forEach(function (b) { b.onclick = function () { editarProveedor(b.dataset.id); }; });
+    $$('.p-borrar').forEach(function (b) { b.onclick = function () { borrarProveedor(b.dataset.id); }; });
+  }
+  function editarProveedor(id) {
+    var p = id ? proveedor(id) : { servicio: S.prov.servicio || '', empresa: '', contacto: '', tel1: '', tel2: '', email: '', direccion: '', web: '', notas: '', activo: true };
+    if (id && !p) return;
+    var campo = function (k, et, max, extra) {
+      return '<label class="campo"><span>' + et + '</span><input class="entrada" id="v_' + k + '" maxlength="' + max + '" value="' + esc(p[k]) + '"' + (extra || '') + '></label>';
+    };
+    modal('<h2>' + (id ? 'Editar proveedor' : 'Nuevo proveedor') + '</h2>' +
+      campo('servicio', 'Servicio *', 60, ' list="v_servicios" placeholder="Ej.: Fontanería"') +
+      '<datalist id="v_servicios">' + servicios().map(function (x) { return '<option value="' + esc(x) + '">'; }).join('') + '</datalist>' +
+      campo('empresa', 'Empresa o persona *', 100, ' placeholder="Ej.: Instalaciones Fuvisa"') +
+      campo('contacto', 'Persona de contacto', 80, ' placeholder="Ej.: María"') +
+      '<div class="dos">' + campo('tel1', 'Teléfono 1', 30, ' type="tel" inputmode="tel"') + campo('tel2', 'Teléfono 2', 30, ' type="tel" inputmode="tel"') + '</div>' +
+      campo('email', 'Correo electrónico', 100, ' type="email" inputmode="email" autocapitalize="off"') +
+      campo('direccion', 'Dirección', 200, ' placeholder="Calle, número, código postal y localidad"') +
+      campo('web', 'Página web', 120, ' inputmode="url" autocapitalize="off" placeholder="Ej.: empresa.es"') +
+      '<label class="campo"><span>Notas</span><textarea class="entrada" id="v_notas" maxlength="1000" placeholder="Horarios, a quién preguntar, otros teléfonos…">' + esc(p.notas) + '</textarea></label>' +
+      '<label class="check"><input type="checkbox" id="v_activo"' + (p.activo ? ' checked' : '') + '> Activo (aparece en la agenda)</label>' +
+      '<p class="error-txt" id="vError"></p>' +
+      '<div class="fila-btns"><button class="btn borde" data-r="0">Cancelar</button><button class="btn" data-r="1">Guardar</button></div>',
+      function (ev, cerrar) {
+        var b = ev.target.closest('[data-r]'); if (!b) return;
+        if (b.dataset.r === '0') return cerrar();
+        var d = { id: id || '', activo: $('#v_activo').checked };
+        ['servicio', 'empresa', 'contacto', 'tel1', 'tel2', 'email', 'direccion', 'web', 'notas'].forEach(function (k) { d[k] = $('#v_' + k).value.trim(); });
+        if (!d.servicio) { $('#vError').textContent = 'Escribe el servicio (ej.: Fontanería).'; return; }
+        if (!d.empresa) { $('#vError').textContent = 'Escribe el nombre de la empresa o persona.'; return; }
+        guardar('guardarProveedor', { proveedor: d }, 'Guardado').then(function () { cerrar(); pintarProveedores(); },
+          function (err) { if ($('#vError')) $('#vError').textContent = err.message; });
+      });
+    setTimeout(function () { var i = $(id ? '#v_empresa' : '#v_servicio'); i && i.focus(); }, 50);
+  }
+  function borrarProveedor(id) {
+    var p = proveedor(id); if (!p) return;
+    confirmar('¿Borrar a «' + esc(p.empresa) + '» de la agenda? Se perderán sus datos. Si solo ya no se usa, mejor edítalo y quita «Activo».', 'Borrar', true).then(function (ok) {
+      if (!ok) return;
+      guardar('borrarProveedor', { id: id }, 'Borrado').then(function () { pintarProveedores(); }, function () {});
+    });
+  }
+
   // ---------------- Ajustes ----------------
   function htmlLista(k) {
     var L = LISTAS[k], items = lista(k);
     return '<details class="tarjeta lista-ed" data-lista="' + k + '"' + (S.abierta === k ? ' open' : '') + '><summary>' + L.titulo + '<small>' + items.length + '</small></summary>' +
       (k === 'espacios' ? '<p class="sub" style="margin:0 0 6px">El <b>código</b> servirá para identificar cada estancia (sistema pendiente de decidir).</p>' : '') +
-      (k === 'personas' ? '<p class="sub" style="margin:0 0 6px">Quién puede entrar en la app (aparece en «¿Quién eres?») y a quién se asignan tareas.</p>' : '') +
+      (k === 'responsables' ? '<p class="sub" style="margin:0 0 6px">Quién puede entrar en la app (aparece en «¿Quién eres?») y a quién se asignan tareas.</p>' : '') +
       (items.length ? items.map(function (e) {
         var extra = [e.codigo && 'Código ' + e.codigo, e.zona, !e.activo && 'desactivado'].filter(Boolean).join(' · ');
         return '<div class="item' + (e.activo ? '' : ' inactivo') + '"><div class="nom"><b>' + esc(e.nombre) + '</b>' + (extra ? '<small>' + esc(extra) + '</small>' : '') + '</div>' +
@@ -454,7 +572,7 @@
         if (!el.nombre) { $('#eError').textContent = 'Escribe el nombre.'; return; }
         var antes = id ? elemento(k, id) : null;
         guardar('guardarElemento', { lista: k, elemento: el }, 'Guardado').then(function () {
-          if (k === 'personas' && antes && antes.nombre === S.quien && el.nombre !== S.quien) { S.quien = el.nombre; lsSet('quien', el.nombre); }
+          if (k === 'responsables' && antes && antes.nombre === S.quien && el.nombre !== S.quien) { S.quien = el.nombre; lsSet('quien', el.nombre); }
           cerrar(); S.abierta = k; pintarAjustes();
         },
           function (err) { if ($('#eError')) $('#eError').textContent = err.message; });
@@ -493,14 +611,14 @@
     });
     if ($('#aReiniciar')) $('#aReiniciar').onclick = function () {
       confirmar('Se borrarán los datos de demostración de este dispositivo.', 'Reiniciar', true).then(function (ok) {
-        if (!ok) return; window.__GAS_RESET__ && window.__GAS_RESET__(); lsDel('demoIniciada'); lsDel('cache'); lsDel('personas'); location.reload();
+        if (!ok) return; window.__GAS_RESET__ && window.__GAS_RESET__(); lsDel('demoIniciada'); lsDel('cache'); lsDel('responsables'); location.reload();
       });
     };
     $('#aSalir').onclick = function () { confirmar('Tendrás que volver a elegir tu nombre y escribir el PIN para entrar.', 'Cerrar sesión', true).then(function (ok) { if (ok) salir(); }); };
   }
 
   // ---------------- Arranque ----------------
-  $('#tituloCasa').textContent = C.NOMBRE_CASA || 'Necesidades';
+  $('#tituloCasa').textContent = C.NOMBRE_CASA || 'Tareas';
   $('#menu').onclick = function (e) { var b = e.target.closest('button[data-ir]'); if (b) ir(b.dataset.ir); };
   $('#btnRecargar').onclick = function () { recargar(); };
   window.addEventListener('hashchange', pintar);

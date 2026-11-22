@@ -1,4 +1,4 @@
-/* Necesidades y mantenimiento – mismo estilo que la app de reservas de Casa María Madre (v1.4) */
+/* Tareas y mantenimiento – mismo estilo que la app de reservas de Casa María Madre (v1.4) */
 :root {
   --pri: #7A1D0B; --pri-2: #9C3A22; --pri-suave: #F3E2DB;
   --fondo: #F2EDE8; --tarjeta: #FFFFFF; --texto: #1F1A17; --texto-2: #534A45; --linea: #D6CBC3;
@@ -42,9 +42,11 @@ main { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: con
 /* ---------- Menú inferior ---------- */
 .menu {
   flex: 0 0 auto; display: grid; grid-template-columns: repeat(4, 1fr); background: var(--tarjeta);
-  border-top: 1px solid var(--linea); box-shadow: 0 -2px 8px rgba(0,0,0,.06); padding: 6px 6px calc(6px + var(--seguro-abajo));
+  border-top: 1px solid var(--linea); box-shadow: 0 -2px 8px rgba(0,0,0,.06); padding: 6px 4px calc(6px + var(--seguro-abajo));
 }
-.menu button { background: none; border: 0; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 0; color: var(--texto-2); font-size: 11px; }
+.menu { grid-template-columns: repeat(5, 1fr); }
+.menu button { background: none; border: 0; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 0; color: var(--texto-2); font-size: 11px; min-width: 0; }
+.menu button span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .menu svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .menu button.activo { color: var(--pri); font-weight: 600; }
 .menu .destacado svg { background: var(--pri); color: #fff; border-radius: 10px; padding: 3px; width: 30px; height: 30px; margin-top: -3px; }
@@ -186,6 +188,25 @@ body[data-vista="nueva"] main, body[data-vista="editar"] main { padding-bottom: 
 .lista-ed[open] summary::after { transform: rotate(-90deg); }
 .lista-ed[open] summary { margin-bottom: 8px; }
 .lista-ed summary small { font-weight: 400; color: var(--texto-2); font-size: 13px; margin-left: auto; margin-right: 10px; }
+
+/* ---------- Proveedores ---------- */
+.filtros.uno { grid-template-columns: 1fr; }
+.tarjeta.prov { padding: 12px 14px; margin-bottom: 10px; }
+.tarjeta.prov.inactivo { opacity: .55; }
+.prov-cab { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.prov-cab .nom { min-width: 0; flex: 1; }
+.prov-cab .nom b { display: block; font-size: 16px; }
+.prov-cab .nom small { display: block; color: var(--texto-2); font-size: 13px; }
+.prov-cab .acc { display: flex; gap: 6px; flex: 0 0 auto; }
+.prov-cab .acc button { width: 34px; height: 34px; border-radius: 10px; border: 1.5px solid #C9BDB4; background: #fff; display: grid; place-items: center; color: var(--texto-2); }
+.prov-cab .acc button.p-borrar { color: var(--error); border-color: #F3B8B2; }
+.prov-cab .acc svg, .prov-btns svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: 0 0 auto; }
+.prov-btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.prov-btns .btn.mini { gap: 6px; padding: 6px 11px; border-radius: 10px; }
+.prov-btns .btn.llamar { background: var(--ok); color: #fff; font-variant-numeric: tabular-nums; }
+.prov-linea { margin: 8px 0 0; font-size: 14px; color: var(--texto-2); overflow-wrap: anywhere; }
+.prov-nota { margin: 8px 0 0; font-size: 13.5px; background: var(--prov-suave); color: #5A3F0C; border-radius: 10px; padding: 7px 10px; white-space: pre-wrap; }
+.prov-nota a { color: inherit; font-weight: 700; }
 
 /* ---------- Modal, carga, toast ---------- */
 .modal { position: fixed; inset: 0; z-index: 50; background: rgba(30, 20, 15, .45); display: flex; align-items: flex-end; justify-content: center; }

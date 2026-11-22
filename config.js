@@ -6,7 +6,7 @@
  *          (datos de ejemplo guardados solo en el propio móvil).
  */
 window.CONFIG = {
-  API_URL: '',
+  API_URL: 'https://script.google.com/macros/s/AKfycbwh5L0xbpCI-ZZWhFDKI4Y-4OR-4XpSXzWfSGmqal80fZhAIP24vfIcft7ZSdVmAWsk/exec',
   NOMBRE_CASA: 'Casa María Madre',
-  SUBTITULO: 'Necesidades y mantenimiento'
+  SUBTITULO: 'Tareas y mantenimiento'
 };
