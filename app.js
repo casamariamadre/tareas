@@ -1,9 +1,9 @@
-/* Tareas y mantenimiento – tareas de la casa, fotos, seguimiento y agenda de proveedores (v1.4.1) */
+/* Tareas y mantenimiento – tareas de la casa, fotos, seguimiento y agenda de proveedores (v1.4.2) */
 (function () {
   'use strict';
   var C = window.CONFIG || {};
   var DEMO = !C.API_URL;
-  var VERSION = '1.4.1';
+  var VERSION = '1.4.2';
   var S = { pin: null, quien: null, datos: null, sinConexion: false,
             f: { estado: 'abiertas', cat: '', esp: '', texto: '', soloUrg: false, mias: false }, textoHechas: '',
             prov: { texto: '', inactivos: false, abiertos: {} },
@@ -311,6 +311,7 @@
     if (!S.datos) return;
     var r = ruta();
     $('#menu').hidden = false; $('#btnRecargar').hidden = false;
+    if ($('#btnImprimir')) $('#btnImprimir').hidden = r.vista !== 'lista';
     actualizarGlobo();
     $('#tituloVista').textContent = TITULOS[r.vista] || '';
     document.body.setAttribute('data-vista', r.vista);
@@ -337,6 +338,7 @@
   function pintarLogin(msg) {
     document.body.setAttribute('data-vista', 'login');
     $('#menu').hidden = true; $('#btnRecargar').hidden = true;
+    if ($('#btnImprimir')) $('#btnImprimir').hidden = true;
     $('#tituloVista').textContent = 'Acceso';
     var elegido = lsGet('quien') || '';
     vista.innerHTML =
@@ -421,6 +423,14 @@
     if (!texto) return true;
     var q = sinAcentos(texto);
     return sinAcentos([t.titulo, t.descripcion, t.notas, t.lugar, nombreEspacio(t), codigoEspacio(t), nombreCategoria(t), t.responsable].join(' ')).indexOf(q) >= 0;
+  }
+  function tareasVisiblesLista() {
+    var f = S.f;
+    var abiertas = tareas().filter(function (t) { return t.estado !== 'Hecha'; });
+    var base = abiertas.filter(function (t) {
+      return (!f.cat || t.categoriaId === f.cat) && (!f.esp || t.espacioId === f.esp) && (!f.soloUrg || t.urgente) && (!f.mias || t.responsable === S.quien) && coincide(t, f.texto);
+    });
+    return ordenar(base.filter(function (t) { return f.estado === 'abiertas' || t.estado === f.estado; }));
   }
   function pintarLista() {
     var f = S.f;
@@ -1050,6 +1060,364 @@
     $('#aSalir').onclick = function () { confirmar('Tendrás que volver a elegir tu nombre y escribir el PIN para entrar.', 'Cerrar sesión', true).then(function (ok) { if (ok) salir(); }); };
   }
 
+  // ---------------- Imprimir lista de tareas en PDF (D24) ----------------
+  var CRITERIOS_PDF = [
+    { id: 'importancia', nombre: 'Importancia', sub: 'Urgentes primero, después Alta, Media y Baja' },
+    { id: 'responsable', nombre: 'Responsable', sub: 'Agrupadas por persona asignada' },
+    { id: 'categoria',   nombre: 'Categoría',   sub: 'Fontanería, Electricidad, Pintura…' },
+    { id: 'estado',      nombre: 'Estado',      sub: 'Pendiente, En curso, Esperando…' },
+    { id: 'espacio',     nombre: 'Espacio',     sub: 'Agrupadas por estancia de la casa' }
+  ];
+  var INCLUIR_PDF = [
+    { id: 'pendientes', nombre: 'Pendientes',             sub: 'Todas las tareas por hacer (sin las hechas)' },
+    { id: 'todas',      nombre: 'Pendientes y hechas',    sub: 'Incluye también el historial de tareas hechas' },
+    { id: 'actual',     nombre: 'Solo lo que se ve ahora', sub: 'Con los filtros y búsqueda actuales de la pantalla' }
+  ];
+  var pdfCarga = null, logoCache = null;
+  function cargarJsPDF() {
+    if (window.jspdf && window.jspdf.jsPDF && window.jspdf.jsPDF.API && window.jspdf.jsPDF.API.autoTable) {
+      return Promise.resolve(window.jspdf.jsPDF);
+    }
+    if (!pdfCarga) {
+      pdfCarga = cargarScript('lib/jspdf.umd.min.js')
+        .then(function () { return cargarScript('lib/jspdf.plugin.autotable.min.js'); })
+        .then(function () {
+          if (!window.jspdf || !window.jspdf.jsPDF) throw new Error('No se pudo cargar el generador de PDF.');
+          return window.jspdf.jsPDF;
+        }, function (e) { pdfCarga = null; throw e; });
+    }
+    return pdfCarga;
+  }
+  function cargarLogoPdf() {
+    if (logoCache !== null) return Promise.resolve(logoCache);
+    return new Promise(function (ok) {
+      var img = new Image();
+      img.onload = function () {
+        try {
+          var c = document.createElement('canvas');
+          c.width = img.naturalWidth; c.height = img.naturalHeight;
+          c.getContext('2d').drawImage(img, 0, 0);
+          logoCache = { data: c.toDataURL('image/png'), w: c.width, h: c.height };
+        } catch (e) { logoCache = false; }
+        ok(logoCache);
+      };
+      img.onerror = function () { logoCache = false; ok(false); };
+      img.src = 'icons/logo-casa-maria-madre.png';
+    });
+  }
+  function modalImprimir() {
+    var pref = lsGet('pdfOpciones') || {};
+    var crit = CRITERIOS_PDF.some(function (c) { return c.id === pref.criterio; }) ? pref.criterio : 'importancia';
+    var inc = INCLUIR_PDF.some(function (i) { return i.id === pref.incluir; }) ? pref.incluir : 'pendientes';
+    var htmlRadio = function (grupo, items, sel) {
+      return '<div class="opciones-pdf" data-grupo="' + grupo + '">' + items.map(function (it) {
+        var on = it.id === sel;
+        return '<label class="opcion-radio' + (on ? ' activo' : '') + '"><input type="radio" name="pdf_' + grupo + '" value="' + it.id + '"' + (on ? ' checked' : '') + '>' +
+          '<div><span>' + esc(it.nombre) + '</span>' + (it.sub ? '<small>' + esc(it.sub) + '</small>' : '') + '</div></label>';
+      }).join('') + '</div>';
+    };
+    modal('<h2>Imprimir lista de tareas</h2>' +
+      '<label class="campo"><span>Organizar por</span></label>' + htmlRadio('criterio', CRITERIOS_PDF, crit) +
+      '<label class="campo"><span>Qué incluir</span></label>' + htmlRadio('incluir', INCLUIR_PDF, inc) +
+      '<div class="fila-btns"><button class="btn borde" data-r="0">Cancelar</button><button class="btn" data-r="1">Crear PDF</button></div>',
+      function (ev, cerrar) {
+        var r = ev.target.closest('.opcion-radio');
+        if (r) {
+          var g = r.closest('.opciones-pdf');
+          $$('.opcion-radio', g).forEach(function (x) { x.classList.toggle('activo', x === r); });
+          var inp = $('input', r);
+          if (inp) { inp.checked = true; if (g.dataset.grupo === 'criterio') crit = inp.value; else inc = inp.value; }
+        }
+        var b = ev.target.closest('[data-r]'); if (!b) return;
+        if (b.dataset.r === '0') return cerrar();
+        lsSet('pdfOpciones', { criterio: crit, incluir: inc });
+        cerrar();
+        generarPdfTareas(crit, inc);
+      });
+  }
+  function agruparParaPdf(listaTareas, criterio) {
+    var ordenadas = ordenar(listaTareas);
+    var grupos = [], mapa = {};
+    function poner(clave, titulo) {
+      if (!mapa[clave]) { mapa[clave] = { titulo: titulo, items: [] }; grupos.push(mapa[clave]); }
+      return mapa[clave];
+    }
+    if (criterio === 'importancia') {
+      [['urg', 'Urgentes'], ['Alta', 'Prioridad alta'], ['Media', 'Prioridad media'], ['Baja', 'Prioridad baja']].forEach(function (g) {
+        var it = ordenadas.filter(function (t) {
+          return g[0] === 'urg' ? t.urgente : (!t.urgente && (t.prioridad || 'Media') === g[0]);
+        });
+        if (it.length) grupos.push({ titulo: g[1], items: it });
+      });
+      return grupos;
+    }
+    if (criterio === 'estado') {
+      ESTADOS.forEach(function (e) {
+        var it = ordenadas.filter(function (t) { return (t.estado || 'Pendiente') === e; });
+        if (it.length) grupos.push({ titulo: e, items: it });
+      });
+      return grupos;
+    }
+    if (criterio === 'responsable') {
+      lista('responsables').forEach(function (r) {
+        var it = ordenadas.filter(function (t) { return t.responsable === r.nombre; });
+        if (it.length) poner('r:' + r.nombre, r.nombre);
+      });
+      ordenadas.forEach(function (t) {
+        var k = t.responsable ? 'r:' + t.responsable : 'sin';
+        poner(k, t.responsable || 'Sin asignar').items.push(t);
+      });
+      return grupos;
+    }
+    if (criterio === 'categoria') {
+      lista('categorias').forEach(function (c) {
+        var it = ordenadas.filter(function (t) { return t.categoriaId === c.id || (!t.categoriaId && t.categoria === c.nombre); });
+        if (it.length) poner('c:' + c.id, c.nombre);
+      });
+      ordenadas.forEach(function (t) {
+        var nom = nombreCategoria(t), k = t.categoriaId ? 'c:' + t.categoriaId : (nom ? 'cn:' + nom : 'sin');
+        poner(k, nom || 'Sin categoría').items.push(t);
+      });
+      return grupos;
+    }
+    if (criterio === 'espacio') {
+      lista('espacios').forEach(function (e) {
+        var it = ordenadas.filter(function (t) { return t.espacioId === e.id || (!t.espacioId && t.espacio === e.nombre); });
+        if (it.length) poner('e:' + e.id, (e.codigo ? e.codigo + ' · ' : '') + e.nombre);
+      });
+      ordenadas.forEach(function (t) {
+        var nom = nombreEspacio(t), cod = codigoEspacio(t), tit = (cod ? cod + ' · ' : '') + (nom || 'Sin espacio');
+        var k = t.espacioId ? 'e:' + t.espacioId : (nom ? 'en:' + nom : 'sin');
+        poner(k, tit).items.push(t);
+      });
+      return grupos;
+    }
+    return [{ titulo: 'Tareas', items: ordenadas }];
+  }
+  function textoImportanciaPdf(t) {
+    var p = t.prioridad || 'Media';
+    return t.urgente ? 'URGENTE' + (p !== 'Alta' ? ' (' + p + ')' : '') : p;
+  }
+  function colorImportanciaPdf(t) {
+    if (t.urgente) return [198, 40, 40];         // rojo urgente (#C62828)
+    var p = t.prioridad || 'Media';
+    if (p === 'Alta') return [122, 29, 11];     // granate (#7A1D0B)
+    if (p === 'Media') return [185, 119, 14];   // ámbar oscuro (#B9770E)
+    return [107, 113, 122];                     // gris pizarra (#6B717A)
+  }
+  function colorEstadoPdf(e) {
+    if (e === 'Hecha') return [31, 122, 69];    // verde (#1F7A45)
+    if (e === 'En curso') return [11, 110, 138];// azul (#0B6E8A)
+    if (e === 'Esperando') return [185, 119, 14];
+    return [83, 74, 69];
+  }
+  function generarPdfTareas(criterio, incluir) {
+    var seleccion = incluir === 'todas' ? tareas().slice()
+      : incluir === 'actual' ? tareasVisiblesLista()
+      : tareas().filter(function (t) { return t.estado !== 'Hecha'; });
+    if (!seleccion.length) { toast('No hay tareas para incluir en el PDF.', true); return; }
+    var critObj = CRITERIOS_PDF.filter(function (c) { return c.id === criterio; })[0] || CRITERIOS_PDF[0];
+    var incObj = INCLUIR_PDF.filter(function (i) { return i.id === incluir; })[0] || INCLUIR_PDF[0];
+    cargando(true);
+    Promise.all([cargarJsPDF(), cargarLogoPdf()]).then(function (res) {
+      var jsPDF = res[0], logo = res[1];
+      var doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+      var M = 14, W = 210, H = 297, util = W - M * 2;
+      var GRANATE = [133, 32, 12], TEXTO = [31, 26, 23], GRIS = [85, 85, 85], LINEA = [221, 213, 204], SUAVE = [247, 241, 234];
+      var ahora = new Date();
+      var fechaHora = pad(ahora.getDate()) + '/' + pad(ahora.getMonth() + 1) + '/' + ahora.getFullYear() + ' ' + pad(ahora.getHours()) + ':' + pad(ahora.getMinutes());
+      var casa = C.NOMBRE_CASA || 'Casa de Espiritualidad María Madre';
+
+      // Cabecera corporativa (mismo estilo que la Hoja de estancia de APP_Maria_Madre)
+      var y = M;
+      if (logo && logo.data) {
+        var lw = 52, lh = lw * (logo.h / logo.w);
+        doc.addImage(logo.data, 'PNG', M, y, lw, lh);
+      } else {
+        doc.setFont('times', 'bold'); doc.setFontSize(16); doc.setTextColor(GRANATE[0], GRANATE[1], GRANATE[2]);
+        doc.text(casa, M, y + 6);
+      }
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(GRIS[0], GRIS[1], GRIS[2]);
+      doc.text('C/ Donante de Sangre, 1 · 19002 Guadalajara · Tel. 612 491 985', M, y + 16);
+      doc.text('casamariamadre@siguenza-guadalajara.org', M, y + 20.2);
+
+      // Bloque derecho de cabecera
+      doc.setFont('times', 'bold'); doc.setFontSize(14.5); doc.setTextColor(TEXTO[0], TEXTO[1], TEXTO[2]);
+      doc.text('TAREAS DE MANTENIMIENTO', W - M, y + 5, { align: 'right' });
+
+      var selloTxt = 'ORGANIZADO POR: ' + critObj.nombre.toUpperCase();
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(8);
+      var sw = doc.getTextWidth(selloTxt) + 6;
+      doc.setFillColor(GRANATE[0], GRANATE[1], GRANATE[2]);
+      doc.roundedRect(W - M - sw, y + 7.2, sw, 5.2, 1, 1, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.text(selloTxt, W - M - sw / 2, y + 10.8, { align: 'center' });
+
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(GRIS[0], GRIS[1], GRIS[2]);
+      doc.text(fechaHora + ' · Impreso por ' + (S.quien || '—'), W - M, y + 16.5, { align: 'right' });
+      doc.text(incObj.nombre + ' (' + seleccion.length + (seleccion.length === 1 ? ' tarea' : ' tareas') + ')', W - M, y + 20.5, { align: 'right' });
+
+      y += 23.5;
+      doc.setDrawColor(GRANATE[0], GRANATE[1], GRANATE[2]); doc.setLineWidth(0.8);
+      doc.line(M, y, W - M, y);
+      y += 5;
+
+      // Columnas de las tablas (no se repite la columna por la que se agrupa, salvo Lugar en Espacio si tiene lugar exacto)
+      var cols = [{ dataKey: 'chk', header: '' }, { dataKey: 'tarea', header: 'Tarea' }, { dataKey: 'lugar', header: 'Lugar' }];
+      if (criterio !== 'responsable') cols.push({ dataKey: 'responsable', header: 'Responsable' });
+      if (criterio !== 'importancia') cols.push({ dataKey: 'importancia', header: 'Importancia' });
+      if (criterio !== 'estado') cols.push({ dataKey: 'estado', header: 'Estado' });
+      cols.push({ dataKey: 'limite', header: 'Fecha límite' });
+
+      var grupos = agruparParaPdf(seleccion, criterio);
+      grupos.forEach(function (g) {
+        if (y > H - 36) { doc.addPage(); y = M + 2; }
+        doc.setFont('times', 'bold'); doc.setFontSize(12); doc.setTextColor(GRANATE[0], GRANATE[1], GRANATE[2]);
+        doc.text(g.titulo + ' (' + g.items.length + ')', M, y + 4);
+        y += 6;
+
+        var body = g.items.map(function (t) {
+          var cat = (criterio !== 'categoria' && nombreCategoria(t)) ? nombreCategoria(t) : '';
+          var det = [cat, t.descripcion, t.notas].filter(Boolean).join(' · ');
+          var prefUrg = (criterio === 'importancia' && t.urgente) ? 'URGENTE · ' : '';
+          var tit = prefUrg + t.titulo + (det ? '\n' + det : '');
+          var lug = criterio === 'espacio' ? (t.lugar || '—') : (textoLugar(t) || '—');
+          var lim = t.limite ? legible(t.limite) + (vencida(t) ? ' (vencida)' : '') : '—';
+          return {
+            _t: t,
+            chk: '',
+            tarea: tit,
+            lugar: lug,
+            responsable: t.responsable || '—',
+            importancia: textoImportanciaPdf(t),
+            estado: t.estado || 'Pendiente',
+            limite: lim
+          };
+        });
+
+        doc.autoTable({
+          startY: y,
+          margin: { left: M, right: M, top: M + 4, bottom: 16 },
+          columns: cols,
+          body: body,
+          theme: 'plain',
+          rowPageBreak: 'avoid',
+          styles: {
+            font: 'helvetica', fontSize: 9, cellPadding: { top: 2.2, right: 2, bottom: 2.2, left: 2 },
+            textColor: TEXTO, lineColor: LINEA, lineWidth: 0, valign: 'middle', overflow: 'linebreak'
+          },
+          headStyles: {
+            fillColor: SUAVE, textColor: [68, 68, 68], fontStyle: 'bold', fontSize: 8,
+            cellPadding: { top: 2.2, right: 2, bottom: 2.2, left: 2 }
+          },
+          columnStyles: {
+            chk: { cellWidth: 8, halign: 'center' },
+            lugar: { cellWidth: 36 },
+            responsable: { cellWidth: 23 },
+            importancia: { cellWidth: 26, fontStyle: 'bold' },
+            estado: { cellWidth: 21 },
+            limite: { cellWidth: 23 }
+          },
+          didParseCell: function (data) {
+            if (data.section === 'body' && data.column.dataKey === 'importancia') {
+              var t = data.row.raw._t;
+              data.cell.styles.textColor = colorImportanciaPdf(t);
+              data.cell.styles.fontStyle = 'bold';
+              if (t.urgente) data.cell.styles.fillColor = [253, 228, 225];
+            }
+            if (data.section === 'body' && data.column.dataKey === 'tarea' && criterio === 'importancia' && data.row.raw._t.urgente) {
+              data.cell.styles.textColor = [198, 40, 40];
+              data.cell.styles.fontStyle = 'bold';
+            }
+            if (data.section === 'body' && data.column.dataKey === 'estado') {
+              var t2 = data.row.raw._t;
+              data.cell.styles.textColor = colorEstadoPdf(t2.estado || 'Pendiente');
+              data.cell.styles.fontStyle = 'bold';
+            }
+            if (data.section === 'body' && data.column.dataKey === 'limite' && vencida(data.row.raw._t)) {
+              data.cell.styles.textColor = [198, 40, 40];
+              data.cell.styles.fontStyle = 'bold';
+            }
+          },
+          didDrawCell: function (data) {
+            var c = data.cell;
+            if (data.section === 'head') {
+              doc.setDrawColor(GRANATE[0], GRANATE[1], GRANATE[2]); doc.setLineWidth(0.5);
+              doc.line(c.x, c.y + c.height, c.x + c.width, c.y + c.height);
+              if (data.column.dataKey === 'chk') {
+                var sh = 3.2, cxh = c.x + (c.width - sh) / 2, cyh = c.y + (c.height - sh) / 2;
+                doc.setDrawColor(68, 68, 68); doc.setLineWidth(0.35);
+                doc.rect(cxh, cyh, sh, sh);
+              }
+            } else if (data.section === 'body') {
+              doc.setDrawColor(LINEA[0], LINEA[1], LINEA[2]); doc.setLineWidth(0.2);
+              doc.line(c.x, c.y + c.height, c.x + c.width, c.y + c.height);
+              if (data.column.dataKey === 'chk') {
+                var s = 3.8, cx = c.x + (c.width - s) / 2, cy = c.y + (c.height - s) / 2;
+                var hecha = (data.row.raw._t.estado === 'Hecha');
+                doc.setDrawColor(GRANATE[0], GRANATE[1], GRANATE[2]); doc.setLineWidth(0.35);
+                doc.rect(cx, cy, s, s);
+                if (hecha) {
+                  doc.setLineWidth(0.5);
+                  doc.line(cx + 0.7, cy + s * 0.55, cx + s * 0.42, cy + s - 0.7);
+                  doc.line(cx + s * 0.42, cy + s - 0.7, cx + s - 0.6, cy + 0.7);
+                }
+              }
+            }
+          }
+        });
+        y = doc.lastAutoTable.finalY + 6;
+      });
+
+      // Pie de página corporativo en todas las páginas («Página X de Y»)
+      var totalPag = doc.getNumberOfPages();
+      for (var p = 1; p <= totalPag; p++) {
+        doc.setPage(p);
+        doc.setDrawColor(LINEA[0], LINEA[1], LINEA[2]); doc.setLineWidth(0.3);
+        doc.line(M, H - 12, W - M, H - 12);
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(GRIS[0], GRIS[1], GRIS[2]);
+        doc.text(casa + ' · Tareas de mantenimiento', M, H - 8);
+        doc.text('Página ' + p + ' de ' + totalPag, W - M, H - 8, { align: 'right' });
+      }
+
+      var nombre = 'Tareas_' + hoyTxt() + '_por-' + criterio + '.pdf';
+      var blob = doc.output('blob');
+      window.__ULTIMO_PDF__ = {
+        nombre: nombre, criterio: criterio, incluir: incluir,
+        tareas: seleccion.length, grupos: grupos.map(function (g) { return g.titulo + ' (' + g.items.length + ')'; }),
+        columnas: cols.map(function (c) { return c.header; }), paginas: totalPag, bytes: blob.size
+      };
+      cargando(false);
+      entregarPdf(blob, nombre);
+    }).catch(function (e) {
+      cargando(false);
+      toast((e && e.message) || 'No se pudo crear el PDF.', true);
+    });
+  }
+  function entregarPdf(blob, nombre) {
+    try {
+      var archivo = new File([blob], nombre, { type: 'application/pdf' });
+      if (navigator.canShare && navigator.share && navigator.canShare({ files: [archivo] })) {
+        navigator.share({ files: [archivo], title: nombre }).then(function () {
+          toast('PDF listo');
+        }, function (err) {
+          if (err && err.name === 'AbortError') return;
+          descargarPdf(blob, nombre);
+        });
+        return;
+      }
+    } catch (e) {}
+    descargarPdf(blob, nombre);
+  }
+  function descargarPdf(blob, nombre) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = nombre;
+    document.body.appendChild(a); a.click(); a.remove();
+    toast('PDF descargado: ' + nombre);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 15000);
+  }
+
   // ---------------- Arranque ----------------
   (function () {
     try {
@@ -1063,6 +1431,7 @@
   $('#tituloCasa').textContent = C.NOMBRE_CASA || 'Tareas';
   $('#menu').onclick = function (e) { var b = e.target.closest('button[data-ir]'); if (b) ir(b.dataset.ir); };
   $('#btnRecargar').onclick = function () { recargar(); };
+  if ($('#btnImprimir')) $('#btnImprimir').onclick = modalImprimir;
   window.addEventListener('hashchange', pintar);
   // Al volver a la app: actualizar datos sin borrar lo que se esté escribiendo.
   document.addEventListener('visibilitychange', function () { if (!document.hidden && S.quien && S.datos) recargar(true); });
