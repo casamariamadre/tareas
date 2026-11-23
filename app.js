@@ -1,13 +1,13 @@
-/* Tareas y mantenimiento – tareas de la casa, fotos, seguimiento y agenda de proveedores (v1.4.2) */
+/* Tareas y mantenimiento – tareas de la casa, fotos, seguimiento y agenda de proveedores (v1.4.3) */
 (function () {
   'use strict';
   var C = window.CONFIG || {};
   var DEMO = !C.API_URL;
-  var VERSION = '1.4.2';
+  var VERSION = '1.4.3';
   var S = { pin: null, quien: null, datos: null, sinConexion: false,
             f: { estado: 'abiertas', cat: '', esp: '', texto: '', soloUrg: false, mias: false }, textoHechas: '',
             prov: { texto: '', inactivos: false, abiertos: {} },
-            fotosF: 'sin', seg: {}, borrador: {}, driveNoVa: false };
+            fotosF: 'sin', seg: {}, borrador: {}, nuevasFotos: [], driveNoVa: false };
   var $ = function (s, el) { return (el || document).querySelector(s); };
   var $$ = function (s, el) { return Array.prototype.slice.call((el || document).querySelectorAll(s)); };
   var vista = $('#vista');
@@ -384,12 +384,6 @@
   function salir(msg) { lsDel('pin'); lsDel('cache'); S.pin = null; S.quien = null; S.datos = null; location.hash = ''; pintarLogin(msg); }
 
   // ---------------- Tarjeta de tarea ----------------
-  function bloquePrio(t) {
-    var c = clasePrio(t);
-    var ic = { hecha: '✓', urgente: '!', alta: '▲', media: '●', baja: '▼' }[c];
-    var tx = { hecha: 'Hecha', urgente: 'Urgente', alta: 'Alta', media: 'Media', baja: 'Baja' }[c];
-    return '<div class="prio ' + c + '"><span class="ic">' + ic + '</span><span class="tx">' + tx + '</span></div>';
-  }
   function etiquetas(t, conCat) {
     var e = '';
     if (esNuevaMia(t)) e += '<span class="etiqueta nueva">Nueva</span>';
@@ -404,8 +398,12 @@
     return e ? '<div class="etiquetas">' + e + '</div>' : '';
   }
   function tarjeta(t) {
-    return '<button class="tarea" data-id="' + esc(t.id) + '">' + bloquePrio(t) +
-      '<div class="info"><b>' + esc(t.titulo) + '</b>' +
+    var c = clasePrio(t);
+    var urg = t.urgente && t.estado !== 'Hecha';
+    return '<button class="tarea ' + c + '" data-id="' + esc(t.id) + '">' +
+      '<div class="info"><div class="tarea-tit"><span class="punto-prio ' + c + '" aria-hidden="true"></span>' +
+      (urg ? '<span class="ic-urg" aria-label="Urgente">⚠️</span>' : '') +
+      '<b>' + esc(t.titulo) + '</b></div>' +
       '<span class="sub lugar">' + esc(textoLugar(t) || 'Sin espacio') + '</span>' +
       etiquetas(t, true) + '</div></button>';
   }
@@ -432,6 +430,12 @@
     });
     return ordenar(base.filter(function (t) { return f.estado === 'abiertas' || t.estado === f.estado; }));
   }
+  function htmlGruposLista(visibles) {
+    return agruparParaPdf(visibles, 'importancia').map(function (g) {
+      return '<div class="grupo-tareas"><div class="enc-grupo ' + g.clase + '"><span>' + esc(g.tituloLista) + '</span><small>' + g.items.length + '</small></div>' +
+        g.items.map(tarjeta).join('') + '</div>';
+    }).join('');
+  }
   function pintarLista() {
     var f = S.f;
     var abiertas = tareas().filter(function (t) { return t.estado !== 'Hecha'; });
@@ -455,7 +459,7 @@
       '<div class="resumen"><div class="resumen-checks"><label class="sub check"><input type="checkbox" id="fMias"' + (f.mias ? ' checked' : '') + '> Mis tareas' + (miasCount ? ' (' + miasCount + ')' : '') + '</label>' +
       '<label class="sub check"><input type="checkbox" id="fUrg"' + (f.soloUrg ? ' checked' : '') + '> Solo urgentes</label></div>' +
       (hayFiltro ? '<button class="limpiar" id="fLimpiar">Quitar filtros</button>' : '') + '</div>' +
-      (visibles.length ? visibles.map(tarjeta).join('')
+      (visibles.length ? htmlGruposLista(visibles)
         : '<div class="vacio">' + (abiertas.length ? 'Nada con estos filtros.' : '¡Todo al día! No hay necesidades pendientes.') + '</div>');
     var tTexto;
     if ($('#fAvisoAsig')) $('#fAvisoAsig').onclick = function () {
@@ -502,7 +506,9 @@
     }
     var dato = function (k, v) { return v ? '<div class="dato"><span>' + k + '</span><span>' + v + '</span></div>' : ''; };
     vista.innerHTML = botonVolver() +
-      '<div class="tarjeta det ' + clasePrio(t) + '"><h2>' + esc(t.titulo) + '</h2>' + etiquetas(t, false) +
+      '<div class="tarjeta det ' + clasePrio(t) + '"><div class="det-cab"><h2>' + esc(t.titulo) + '</h2>' +
+      '<div class="det-acc"><button class="btn sec mini" id="dEditar">' + ICO.editar + 'Editar</button>' +
+      '<button class="btn peligro discreto" id="dBorrar">' + ICO.borrar + 'Borrar</button></div></div>' + etiquetas(t, false) +
       '<div style="margin-top:10px">' +
       dato('Espacio', esc((codigoEspacio(t) ? codigoEspacio(t) + ' · ' : '') + nombreEspacio(t))) +
       dato('Lugar exacto', esc(t.lugar)) +
@@ -518,7 +524,6 @@
       ESTADOS.map(function (e) { return '<button data-e="' + e + '" class="e-' + claseEstado(e) + (t.estado === e ? ' activo' : '') + '">' + e + '</button>'; }).join('') +
       '</div></div>' +
       bloqueFotosTarea(t) + bloqueSeguimiento(t) +
-      '<div class="fila-btns" style="margin-bottom:12px"><button class="btn" id="dEditar">Editar</button><button class="btn peligro" id="dBorrar">Borrar</button></div>' +
       '<p class="pie-meta">Apuntada por ' + esc(t.creadoPor || '—') + ' el ' + legible(t.creadoEl) +
       (t.modificadoEl && t.modificadoEl !== t.creadoEl ? '<br>Último cambio: ' + esc(t.modificadoPor) + ', ' + legible(t.modificadoEl) : '') +
       (t.hechaEl ? '<br>Hecha el ' + legible(t.hechaEl) : '') + '</p>';
@@ -528,10 +533,7 @@
       var b = e.target.closest('button'); if (!b || b.dataset.e === t.estado) return;
       guardar('cambiarEstado', { id: t.id, estado: b.dataset.e }, 'Estado: ' + b.dataset.e).then(function () { pintar(); }, function () {});
     };
-    $('#dFotoCam').onclick = function () {
-      elegirArchivos(true, false).then(function (a) { return subirFotos(a, t.id); }).then(function (ids) { if (ids.length) pintar(); });
-    };
-    $('#dFotoRepo').onclick = function () { modalElegirFotos(t.id); };
+    enlazarSelectorFotosTarea(t);
     enlazarSeguimiento(t);
     enlazarFotos(vista);
     $('#dEditar').onclick = function () { ir('editar/' + encodeURIComponent(t.id)); };
@@ -688,17 +690,31 @@
       $$('#ftTareas .fila-tarea').forEach(function (l) { l.hidden = q && l.dataset.txt.indexOf(q) < 0; });
     };
   }
-  /** Elegir fotos del repositorio para una tarea (primero las sin asignar). */
+  /** Selector de fotos (punto 5 de D23): «Subir desde la galería» principal, «Hacer foto» al lado y «Ya en la app» debajo. */
+  function fotosDisponiblesRepo(excluirIds) {
+    var ex = excluirIds || [];
+    var disp = fotos().filter(function (f) { return !f.archivada && ex.indexOf(f.id) < 0; });
+    return disp.filter(function (f) { return grupoFoto(f) === 'sin'; }).concat(disp.filter(function (f) { return grupoFoto(f) !== 'sin'; }));
+  }
+  function marcaFotoRepo(f) {
+    var n = f.tareas.filter(function (x) { return tarea(x); }).length;
+    return n ? 'En ' + n + (n === 1 ? ' tarea' : ' tareas') : 'Sin asignar';
+  }
+  function htmlSelectorFotos(pref, excluirIds) {
+    var disp = fotosDisponiblesRepo(excluirIds);
+    return '<div class="sel-fotos-acc">' +
+      '<button type="button" class="btn btn-gal-pri" id="' + pref + 'Gal">' + ICO.galeria + 'Subir desde la galería</button>' +
+      '<button type="button" class="btn sec mini btn-cam-sec" id="' + pref + 'Cam">' + ICO.camara + 'Hacer foto</button></div>' +
+      (disp.length ? '<div class="enc-ya-app">Ya en la app</div><div class="rejilla-fotos elegir" id="' + pref + 'Repo">' + disp.map(function (f) {
+        return '<button type="button" class="mini-foto" data-elegir="' + esc(f.id) + '">' + htmlImg(f.id) +
+          '<span class="pie">' + esc(marcaFotoRepo(f)) + '</span><span class="marca">✓</span></button>';
+      }).join('') + '</div>' : '');
+  }
   function modalElegirFotos(tid) {
-    var disp = fotos().filter(function (f) { return f.tareas.indexOf(tid) < 0 && !f.archivada; });
-    disp = disp.filter(function (f) { return grupoFoto(f) === 'sin'; }).concat(disp.filter(function (f) { return grupoFoto(f) !== 'sin'; }));
+    var yaEnTarea = fotosDe(tid).map(function (f) { return f.id; });
     var sel = [];
     modal('<h2>Añadir fotos a la tarea</h2>' +
-      (disp.length ? '<p class="sub" style="margin:0 0 4px">Toca las fotos que quieras añadir.</p><div class="rejilla-fotos elegir">' + disp.map(function (f) {
-        return '<button class="mini-foto" data-elegir="' + esc(f.id) + '">' + htmlImg(f.id) + '<span class="pie">' +
-          (grupoFoto(f) === 'sin' ? 'Sin asignar' : corta(f.fecha) + ' · en otra tarea') + '</span><span class="marca">✓</span></button>';
-      }).join('') + '</div>' : '<p class="sub">No hay fotos en el repositorio para añadir.</p>') +
-      '<button class="btn borde ancho mini" data-r="galeria" style="margin:4px 0 12px">' + ICO.galeria + 'Subir desde la galería</button>' +
+      htmlSelectorFotos('el', yaEnTarea) +
       '<div class="fila-btns"><button class="btn borde" data-r="0">Cancelar</button><button class="btn" data-r="1" id="elOk" disabled>Añadir</button></div>',
       function (ev, cerrar) {
         var e = ev.target.closest('[data-elegir]');
@@ -711,18 +727,32 @@
         }
         var b = ev.target.closest('[data-r]'); if (!b) return;
         if (b.dataset.r === '0') return cerrar();
-        if (b.dataset.r === 'galeria') { cerrar(); return elegirArchivos(false, true).then(function (a) { return subirFotos(a, tid); }).then(function (ids) { if (ids.length) pintar(); }); }
         guardar('fotosATarea', { tareaId: tid, fotos: sel }, sel.length === 1 ? 'Foto añadida' : sel.length + ' fotos añadidas').then(function () { cerrar(); pintar(); }, function () {});
       });
+    if ($('#elGal')) $('#elGal').onclick = function () { cerrarModal(); elegirArchivos(false, true).then(function (a) { return subirFotos(a, tid); }).then(function (ids) { if (ids.length) pintar(); }); };
+    if ($('#elCam')) $('#elCam').onclick = function () { cerrarModal(); elegirArchivos(true, false).then(function (a) { return subirFotos(a, tid); }).then(function (ids) { if (ids.length) pintar(); }); };
     activarImagenes($('#modal'));
   }
   function bloqueFotosTarea(t) {
     var fs = fotosDe(t.id);
+    var idsYa = fs.map(function (f) { return f.id; });
     return '<div class="tarjeta"><h2 class="con-num">Fotos<small>' + fs.length + '</small></h2>' +
       (fs.length ? '<div class="tira-fotos">' + fs.map(function (f) { return '<button class="mini-foto" data-ver="' + esc(f.id) + '">' + htmlImg(f.id) + '</button>'; }).join('') + '</div>'
         : '<p class="sub" style="margin:0 0 10px">Sin fotos todavía.</p>') +
-      '<div class="fila-btns"><button class="btn sec mini" id="dFotoCam">' + ICO.camara + 'Hacer foto</button>' +
-      '<button class="btn sec mini" id="dFotoRepo">' + ICO.galeria + 'Del repositorio</button></div></div>';
+      htmlSelectorFotos('dFoto', idsYa) + '</div>';
+  }
+  function enlazarSelectorFotosTarea(t) {
+    if ($('#dFotoGal')) $('#dFotoGal').onclick = function () {
+      elegirArchivos(false, true).then(function (a) { return subirFotos(a, t.id); }).then(function (ids) { if (ids.length) pintar(); });
+    };
+    if ($('#dFotoCam')) $('#dFotoCam').onclick = function () {
+      elegirArchivos(true, false).then(function (a) { return subirFotos(a, t.id); }).then(function (ids) { if (ids.length) pintar(); });
+    };
+    $$('#dFotoRepo [data-elegir]', vista).forEach(function (b) {
+      b.onclick = function () {
+        guardar('fotosATarea', { tareaId: t.id, fotos: [b.dataset.elegir] }, 'Foto añadida').then(function () { pintar(); }, function () {});
+      };
+    });
   }
 
   // ---------------- Seguimiento (avances de cada tarea, plegados por día) ----------------
@@ -820,9 +850,48 @@
   }
 
   // ---------------- Formulario (nueva / editar) ----------------
+  function pintarFotosFormNueva() {
+    var cont = $('#nFotosCont'); if (!cont) return;
+    var elegidas = (S.nuevasFotos || []).filter(function (fid) { return foto(fid); });
+    S.nuevasFotos = elegidas;
+    cont.innerHTML = '<h2 class="con-num">Fotos<small>' + elegidas.length + '</small></h2>' +
+      (elegidas.length ? '<div class="tira-fotos" id="nFotosTira">' + elegidas.map(function (fid) {
+        return '<span class="mini-foto">' + htmlImg(fid) + '<button type="button" class="quitar" data-quitar-nueva="' + esc(fid) + '" aria-label="Quitar">×</button></span>';
+      }).join('') + '</div>' : '<p class="sub" style="margin:0 0 10px">Sin fotos seleccionadas.</p>') +
+      htmlSelectorFotos('nFoto', elegidas);
+    $$('[data-quitar-nueva]', cont).forEach(function (b) {
+      b.onclick = function () {
+        S.nuevasFotos = S.nuevasFotos.filter(function (x) { return x !== b.dataset.quitarNueva; });
+        pintarFotosFormNueva();
+      };
+    });
+    if ($('#nFotoGal')) $('#nFotoGal').onclick = function () {
+      elegirArchivos(false, true).then(function (a) { return subirFotos(a); }).then(function (ids) {
+        if (!ids.length) return;
+        ids.forEach(function (fid) { if (S.nuevasFotos.indexOf(fid) < 0) S.nuevasFotos.push(fid); });
+        pintarFotosFormNueva();
+      });
+    };
+    if ($('#nFotoCam')) $('#nFotoCam').onclick = function () {
+      elegirArchivos(true, false).then(function (a) { return subirFotos(a); }).then(function (ids) {
+        if (!ids.length) return;
+        ids.forEach(function (fid) { if (S.nuevasFotos.indexOf(fid) < 0) S.nuevasFotos.push(fid); });
+        pintarFotosFormNueva();
+      });
+    };
+    $$('#nFotoRepo [data-elegir]', cont).forEach(function (b) {
+      b.onclick = function () {
+        var fid = b.dataset.elegir;
+        if (S.nuevasFotos.indexOf(fid) < 0) S.nuevasFotos.push(fid);
+        pintarFotosFormNueva();
+      };
+    });
+    activarImagenes(cont);
+  }
   function pintarFormulario(id) {
     var t = id ? tarea(id) : null;
     if (id && !t) { vista.innerHTML = botonVolver() + '<div class="vacio">Esta necesidad ya no existe.</div>'; return enlazarVolver(); }
+    if (!t) S.nuevasFotos = [];
     var v = t ? JSON.parse(JSON.stringify(t)) : { titulo: '', espacioId: S.f.esp || '', categoriaId: S.f.cat || '', lugar: '', prioridad: 'Media', urgente: false, estado: 'Pendiente', responsable: '', limite: '', descripcion: '', notas: '' };
     var resp = lista('responsables').filter(function (r) { return r.activo || r.nombre === v.responsable; }).map(function (r) { return r.nombre; });
     if (v.responsable && resp.indexOf(v.responsable) < 0) resp.push(v.responsable);
@@ -843,12 +912,14 @@
       '<label class="campo"><span>Descripción</span><textarea class="entrada" id="nDesc" maxlength="2000" placeholder="Detalles, medidas, material necesario…">' + esc(v.descripcion) + '</textarea></label>' +
       (t ? '<label class="campo"><span>Notas</span><textarea class="entrada" id="nNotas" maxlength="2000" placeholder="Ej.: Llamado al fontanero el lunes">' + esc(v.notas) + '</textarea></label>' : '') +
       '<p class="error-txt" id="nError"></p></div>' +
+      (!t ? '<div class="tarjeta" id="nFotosCont"></div>' : '') +
       '<div class="pie-form"><button class="btn borde" id="nCancelar">Cancelar</button><button class="btn" id="nGuardar">' + (t ? 'Guardar cambios' : 'Apuntar') + '</button></div>';
     enlazarVolver();
+    if (!t) pintarFotosFormNueva();
     $('#nPrio').onclick = function (e) { var b = e.target.closest('button'); if (!b) return; v.prioridad = b.dataset.p; $$('button', this).forEach(function (x) { x.classList.toggle('activo', x === b); }); };
     $('#nUrg').onchange = function () { v.urgente = this.checked; $('#nUrgL').classList.toggle('on', this.checked); };
     if ($('#nEstado')) $('#nEstado').onclick = function (e) { var b = e.target.closest('button'); if (!b) return; v.estado = b.dataset.e; $$('button', this).forEach(function (x) { x.classList.toggle('activo', x === b); }); };
-    $('#nCancelar').onclick = function () { if (t) volver(); else ir('lista'); };
+    $('#nCancelar').onclick = function () { S.nuevasFotos = []; if (t) volver(); else ir('lista'); };
     $('#nGuardar').onclick = function () {
       v.titulo = $('#nTitulo').value.trim();
       if (!v.titulo) { $('#nError').textContent = 'Escribe qué hace falta.'; $('#nTitulo').focus(); return; }
@@ -857,13 +928,18 @@
       v.responsable = $('#nResp').value; v.limite = $('#nLimite').value; v.descripcion = $('#nDesc').value.trim();
       if ($('#nNotas')) v.notas = $('#nNotas').value.trim();
       var pedirWa = !!(v.responsable && v.responsable !== S.quien && v.responsable !== respAntes);
+      var fotosAsig = (!t && S.nuevasFotos && S.nuevasFotos.length) ? S.nuevasFotos.slice() : [];
       guardar('guardarTarea', { tarea: v }, t ? 'Cambios guardados' : 'Apuntada').then(function (d) {
-        var salirForm = function () {
-          if (t) { history.length > 1 && historial > 0 ? history.back() : ir('tarea/' + encodeURIComponent(t.id)); }
-          else ir('lista');
-        };
-        if (pedirWa && d && d.id) modalAvisoGuardado(d.id, salirForm);
-        else salirForm();
+        S.nuevasFotos = [];
+        var pFotos = (fotosAsig.length && d && d.id) ? guardar('fotosATarea', { tareaId: d.id, fotos: fotosAsig }) : Promise.resolve();
+        return pFotos.then(function () {
+          var salirForm = function () {
+            if (t) { history.length > 1 && historial > 0 ? history.back() : ir('tarea/' + encodeURIComponent(t.id)); }
+            else ir('lista');
+          };
+          if (pedirWa && d && d.id) modalAvisoGuardado(d.id, salirForm);
+          else salirForm();
+        });
       }, function (e) { if (e && e.message !== 'sin conexión') $('#nError').textContent = e.message; });
     };
     if (!t) setTimeout(function () { $('#nTitulo') && $('#nTitulo').focus(); }, 50);
@@ -884,8 +960,19 @@
   }
   function servicios() {
     var vistos = [];
-    proveedores().forEach(function (p) { if (p.servicio && vistos.indexOf(p.servicio) < 0) vistos.push(p.servicio); });
-    return vistos;
+    proveedores().forEach(function (p) {
+      var s = (p.servicio || '').trim();
+      if (!s) return;
+      var k = sinAcentos(s);
+      if (!vistos.some(function (v) { return sinAcentos(v) === k; })) vistos.push(s);
+    });
+    return vistos.sort(function (a, b) { return a.localeCompare(b, 'es', { sensitivity: 'base' }); });
+  }
+  function buscarServicioExistente(texto) {
+    var k = sinAcentos((texto || '').trim());
+    if (!k) return '';
+    var enc = servicios().filter(function (s) { return sinAcentos(s) === k; })[0];
+    return enc || (texto || '').trim();
   }
   function coincideProv(p, texto) {
     if (!texto) return true;
@@ -948,12 +1035,18 @@
   function editarProveedor(id) {
     var p = id ? proveedor(id) : { servicio: '', empresa: '', contacto: '', tel1: '', tel2: '', email: '', direccion: '', web: '', notas: '', activo: true };
     if (id && !p) return;
+    var listaServ = servicios();
+    var servAct = p.servicio ? buscarServicioExistente(p.servicio) : '';
+    if (servAct && listaServ.indexOf(servAct) < 0) { listaServ.push(servAct); listaServ.sort(function (a, b) { return a.localeCompare(b, 'es', { sensitivity: 'base' }); }); }
     var campo = function (k, et, max, extra) {
       return '<label class="campo"><span>' + et + '</span><input class="entrada" id="v_' + k + '" maxlength="' + max + '" value="' + esc(p[k]) + '"' + (extra || '') + '></label>';
     };
     modal('<h2>' + (id ? 'Editar proveedor' : 'Nuevo proveedor') + '</h2>' +
-      campo('servicio', 'Servicio *', 60, ' list="v_servicios" placeholder="Ej.: Fontanería"') +
-      '<datalist id="v_servicios">' + servicios().map(function (x) { return '<option value="' + esc(x) + '">'; }).join('') + '</datalist>' +
+      '<label class="campo"><span>Servicio *</span><select class="entrada" id="v_servicio">' +
+      '<option value="">— Elegir servicio —</option>' +
+      listaServ.map(function (x) { return '<option value="' + esc(x) + '"' + (x === servAct ? ' selected' : '') + '>' + esc(x) + '</option>'; }).join('') +
+      '<option value="__nuevo__">+ Nuevo servicio…</option></select></label>' +
+      '<label class="campo" id="v_servicio_nuevo_wrap" hidden><span>Nombre del nuevo servicio *</span><input class="entrada" id="v_servicio_nuevo" maxlength="60" placeholder="Ej.: Fontanería"></label>' +
       campo('empresa', 'Empresa o persona *', 100, ' placeholder="Ej.: Instalaciones Fuvisa"') +
       campo('contacto', 'Persona de contacto', 80, ' placeholder="Ej.: María"') +
       '<div class="dos">' + campo('tel1', 'Teléfono 1', 30, ' type="tel" inputmode="tel"') + campo('tel2', 'Teléfono 2', 30, ' type="tel" inputmode="tel"') + '</div>' +
@@ -968,12 +1061,22 @@
         var b = ev.target.closest('[data-r]'); if (!b) return;
         if (b.dataset.r === '0') return cerrar();
         var d = { id: id || '', activo: $('#v_activo').checked };
-        ['servicio', 'empresa', 'contacto', 'tel1', 'tel2', 'email', 'direccion', 'web', 'notas'].forEach(function (k) { d[k] = $('#v_' + k).value.trim(); });
-        if (!d.servicio) { $('#vError').textContent = 'Escribe el servicio (ej.: Fontanería).'; return; }
+        var selS = $('#v_servicio').value;
+        d.servicio = selS === '__nuevo__' ? buscarServicioExistente($('#v_servicio_nuevo').value.trim()) : selS.trim();
+        ['empresa', 'contacto', 'tel1', 'tel2', 'email', 'direccion', 'web', 'notas'].forEach(function (k) { d[k] = $('#v_' + k).value.trim(); });
+        if (!d.servicio) {
+          $('#vError').textContent = selS === '__nuevo__' ? 'Escribe el nombre del nuevo servicio.' : 'Elige un servicio.';
+          return;
+        }
         if (!d.empresa) { $('#vError').textContent = 'Escribe el nombre de la empresa o persona.'; return; }
         guardar('guardarProveedor', { proveedor: d }, 'Guardado').then(function () { S.prov.abiertos[d.servicio] = true; cerrar(); pintarProveedores(); },
           function (err) { if ($('#vError')) $('#vError').textContent = err.message; });
       });
+    if ($('#v_servicio')) $('#v_servicio').onchange = function () {
+      var nuevo = this.value === '__nuevo__';
+      $('#v_servicio_nuevo_wrap').hidden = !nuevo;
+      if (nuevo) setTimeout(function () { $('#v_servicio_nuevo') && $('#v_servicio_nuevo').focus(); }, 30);
+    };
     setTimeout(function () { var i = $(id ? '#v_empresa' : '#v_servicio'); i && i.focus(); }, 50);
   }
   function borrarProveedor(id) {
@@ -1109,6 +1212,8 @@
     var pref = lsGet('pdfOpciones') || {};
     var crit = CRITERIOS_PDF.some(function (c) { return c.id === pref.criterio; }) ? pref.criterio : 'importancia';
     var inc = INCLUIR_PDF.some(function (i) { return i.id === pref.incluir; }) ? pref.incluir : 'pendientes';
+    var conNotas = !!pref.notas;
+    var numLineas = [1, 2, 3].indexOf(Number(pref.lineas)) >= 0 ? Number(pref.lineas) : 2;
     var htmlRadio = function (grupo, items, sel) {
       return '<div class="opciones-pdf" data-grupo="' + grupo + '">' + items.map(function (it) {
         var on = it.id === sel;
@@ -1119,6 +1224,11 @@
     modal('<h2>Imprimir lista de tareas</h2>' +
       '<label class="campo"><span>Organizar por</span></label>' + htmlRadio('criterio', CRITERIOS_PDF, crit) +
       '<label class="campo"><span>Qué incluir</span></label>' + htmlRadio('incluir', INCLUIR_PDF, inc) +
+      '<div class="notas-pdf-box"><label class="check"><input type="checkbox" id="pdfNotas"' + (conNotas ? ' checked' : '') + '> Espacio para notas a mano</label>' +
+      '<div class="notas-pdf-lineas" id="pdfNotasLineasWrap"' + (conNotas ? '' : ' hidden') + '><span>Líneas por tarea</span>' +
+      '<div class="segmento tres" id="pdfNotasLineas">' + [1, 2, 3].map(function (n) {
+        return '<button type="button" data-lin="' + n + '" class="' + (numLineas === n ? 'activo' : '') + '">' + n + (n === 1 ? ' línea' : ' líneas') + '</button>';
+      }).join('') + '</div></div></div>' +
       '<div class="fila-btns"><button class="btn borde" data-r="0">Cancelar</button><button class="btn" data-r="1">Crear PDF</button></div>',
       function (ev, cerrar) {
         var r = ev.target.closest('.opcion-radio');
@@ -1128,12 +1238,22 @@
           var inp = $('input', r);
           if (inp) { inp.checked = true; if (g.dataset.grupo === 'criterio') crit = inp.value; else inc = inp.value; }
         }
+        var bl = ev.target.closest('[data-lin]');
+        if (bl) {
+          numLineas = Number(bl.dataset.lin);
+          $$('#pdfNotasLineas button').forEach(function (x) { x.classList.toggle('activo', x === bl); });
+          return;
+        }
         var b = ev.target.closest('[data-r]'); if (!b) return;
         if (b.dataset.r === '0') return cerrar();
-        lsSet('pdfOpciones', { criterio: crit, incluir: inc });
+        lsSet('pdfOpciones', { criterio: crit, incluir: inc, notas: conNotas, lineas: numLineas });
         cerrar();
-        generarPdfTareas(crit, inc);
+        generarPdfTareas(crit, inc, conNotas ? numLineas : 0);
       });
+    if ($('#pdfNotas')) $('#pdfNotas').onchange = function () {
+      conNotas = this.checked;
+      $('#pdfNotasLineasWrap').hidden = !conNotas;
+    };
   }
   function agruparParaPdf(listaTareas, criterio) {
     var ordenadas = ordenar(listaTareas);
@@ -1143,11 +1263,11 @@
       return mapa[clave];
     }
     if (criterio === 'importancia') {
-      [['urg', 'Urgentes'], ['Alta', 'Prioridad alta'], ['Media', 'Prioridad media'], ['Baja', 'Prioridad baja']].forEach(function (g) {
+      [['urg', 'Urgentes', '⚠️ Urgentes', 'urgente'], ['Alta', 'Prioridad alta', 'Alta', 'alta'], ['Media', 'Prioridad media', 'Media', 'media'], ['Baja', 'Prioridad baja', 'Baja', 'baja']].forEach(function (g) {
         var it = ordenadas.filter(function (t) {
           return g[0] === 'urg' ? t.urgente : (!t.urgente && (t.prioridad || 'Media') === g[0]);
         });
-        if (it.length) grupos.push({ titulo: g[1], items: it });
+        if (it.length) grupos.push({ titulo: g[1], tituloLista: g[2], clase: g[3], items: it });
       });
       return grupos;
     }
@@ -1211,7 +1331,10 @@
     if (e === 'Esperando') return [185, 119, 14];
     return [83, 74, 69];
   }
-  function generarPdfTareas(criterio, incluir) {
+  function generarPdfTareas(criterio, incluir, lineasNotas) {
+    var nLin = Number(lineasNotas) || 0;
+    var altoLineaNota = 6.5;
+    var extraNota = nLin > 0 ? (nLin * altoLineaNota + 2) : 0;
     var seleccion = incluir === 'todas' ? tareas().slice()
       : incluir === 'actual' ? tareasVisiblesLista()
       : tareas().filter(function (t) { return t.estado !== 'Hecha'; });
@@ -1255,7 +1378,7 @@
 
       doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(GRIS[0], GRIS[1], GRIS[2]);
       doc.text(fechaHora + ' · Impreso por ' + (S.quien || '—'), W - M, y + 16.5, { align: 'right' });
-      doc.text(incObj.nombre + ' (' + seleccion.length + (seleccion.length === 1 ? ' tarea' : ' tareas') + ')', W - M, y + 20.5, { align: 'right' });
+      doc.text(incObj.nombre + ' (' + seleccion.length + (seleccion.length === 1 ? ' tarea' : ' tareas') + ')' + (nLin ? ' · ' + nLin + (nLin === 1 ? ' línea de notas' : ' líneas de notas') : ''), W - M, y + 20.5, { align: 'right' });
 
       y += 23.5;
       doc.setDrawColor(GRANATE[0], GRANATE[1], GRANATE[2]); doc.setLineWidth(0.8);
@@ -1303,8 +1426,10 @@
           theme: 'plain',
           rowPageBreak: 'avoid',
           styles: {
-            font: 'helvetica', fontSize: 9, cellPadding: { top: 2.2, right: 2, bottom: 2.2, left: 2 },
-            textColor: TEXTO, lineColor: LINEA, lineWidth: 0, valign: 'middle', overflow: 'linebreak'
+            font: 'helvetica', fontSize: 9,
+            cellPadding: { top: 2.2, right: 2, bottom: 2.2 + extraNota, left: 2 },
+            textColor: TEXTO, lineColor: LINEA, lineWidth: 0,
+            valign: nLin > 0 ? 'top' : 'middle', overflow: 'linebreak'
           },
           headStyles: {
             fillColor: SUAVE, textColor: [68, 68, 68], fontStyle: 'bold', fontSize: 8,
@@ -1323,7 +1448,7 @@
               var t = data.row.raw._t;
               data.cell.styles.textColor = colorImportanciaPdf(t);
               data.cell.styles.fontStyle = 'bold';
-              if (t.urgente) data.cell.styles.fillColor = [253, 228, 225];
+              if (t.urgente && !nLin) data.cell.styles.fillColor = [253, 228, 225];
             }
             if (data.section === 'body' && data.column.dataKey === 'tarea' && criterio === 'importancia' && data.row.raw._t.urgente) {
               data.cell.styles.textColor = [198, 40, 40];
@@ -1351,9 +1476,16 @@
               }
             } else if (data.section === 'body') {
               doc.setDrawColor(LINEA[0], LINEA[1], LINEA[2]); doc.setLineWidth(0.2);
+              if (nLin > 0) {
+                for (var li = 1; li < nLin; li++) {
+                  var ly = c.y + c.height - (nLin - li) * altoLineaNota;
+                  doc.line(c.x, ly, c.x + c.width, ly);
+                }
+              }
               doc.line(c.x, c.y + c.height, c.x + c.width, c.y + c.height);
               if (data.column.dataKey === 'chk') {
-                var s = 3.8, cx = c.x + (c.width - s) / 2, cy = c.y + (c.height - s) / 2;
+                var s = 3.8, cx = c.x + (c.width - s) / 2;
+                var cy = nLin > 0 ? (c.y + 2.4) : (c.y + (c.height - s) / 2);
                 var hecha = (data.row.raw._t.estado === 'Hecha');
                 doc.setDrawColor(GRANATE[0], GRANATE[1], GRANATE[2]); doc.setLineWidth(0.35);
                 doc.rect(cx, cy, s, s);
