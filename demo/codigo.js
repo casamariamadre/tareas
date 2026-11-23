@@ -19,7 +19,7 @@
 var PIN = '';              // PIN común, OBLIGATORIO. Ejemplo: '2468'. Lo escriben todas las personas al entrar.
 var HOJA_ID = '';          // Solo si el script NO se creó desde la hoja (Extensiones ▸ Apps Script): el ID de la hoja (lo que va entre /d/ y /edit en su dirección).
 var ZONA = 'Europe/Madrid';
-var VERSION = '1.4.0';
+var VERSION = '1.4.1';
 
 var ESTADOS = ['Pendiente', 'En curso', 'Esperando', 'Hecha'];
 var PRIORIDADES = ['Alta', 'Media', 'Baja'];
@@ -29,7 +29,8 @@ var PRIORIDADES = ['Alta', 'Media', 'Baja'];
 var HOJAS = {
   'Tareas': ['ID', 'Título', 'Descripción', 'Categoría ID', 'Categoría', 'Espacio ID', 'Espacio', 'Lugar exacto',
              'Prioridad', 'Urgente', 'Estado', 'Responsable', 'Fecha límite', 'Notas',
-             'Creado por', 'Creado el', 'Modificado por', 'Modificado el', 'Hecha el', 'Aviso'],
+             'Creado por', 'Creado el', 'Modificado por', 'Modificado el', 'Hecha el', 'Aviso',
+             'Aviso fecha', 'Aviso por', 'Aviso para'],
   'Espacios': ['ID', 'Nombre', 'Código', 'Zona', 'Activo', 'Orden'],
   'Categorías': ['ID', 'Nombre', 'Activo', 'Orden'],
   'Responsables': ['ID', 'Nombre', 'Activo', 'Orden'],
@@ -191,6 +192,7 @@ function atender(pet) {
       case 'cambiarEstado': return conBloqueo_(function () { return cambiarEstado_(d.id, d.estado, quien); });
       case 'borrarTarea': return conBloqueo_(function () { return borrarTarea_(d.id, quien); });
       case 'vistoTarea': return conBloqueo_(function () { return vistoTarea_(d.id, quien); });
+      case 'registrarAviso': return conBloqueo_(function () { return registrarAviso_(d, quien); });
       case 'guardarElemento': return conBloqueo_(function () { return guardarElemento_(d.lista, d.elemento || {}, quien); });
       case 'borrarElemento': return conBloqueo_(function () { return borrarElemento_(d.lista, d.id, quien); });
       case 'guardarProveedor': return conBloqueo_(function () { return guardarProveedor_(d.proveedor || {}, quien); });
@@ -226,19 +228,22 @@ function conBloqueo_(fn) {
 // =====================================================================
 // LECTURA
 // =====================================================================
+function mapearTarea_(t) {
+  return {
+    id: String(t['ID']), titulo: t['Título'], descripcion: t['Descripción'],
+    categoriaId: String(t['Categoría ID'] || ''), categoria: t['Categoría'],
+    espacioId: String(t['Espacio ID'] || ''), espacio: t['Espacio'], lugar: t['Lugar exacto'],
+    prioridad: t['Prioridad'] || 'Media', urgente: t['Urgente'] === 'Sí', estado: t['Estado'] || 'Pendiente',
+    responsable: t['Responsable'], limite: fecha_(t['Fecha límite']), notas: t['Notas'],
+    creadoPor: t['Creado por'], creadoEl: marca_(t['Creado el']),
+    modificadoPor: t['Modificado por'], modificadoEl: marca_(t['Modificado el']), hechaEl: marca_(t['Hecha el']),
+    aviso: String(t['Aviso'] || ''),
+    avisoFecha: marca_(t['Aviso fecha']), avisoPor: String(t['Aviso por'] || ''), avisoPara: String(t['Aviso para'] || '')
+  };
+}
+
 function estado_() {
-  var tareas = filas_('Tareas').filter(function (t) { return t['ID']; }).map(function (t) {
-    return {
-      id: String(t['ID']), titulo: t['Título'], descripcion: t['Descripción'],
-      categoriaId: String(t['Categoría ID'] || ''), categoria: t['Categoría'],
-      espacioId: String(t['Espacio ID'] || ''), espacio: t['Espacio'], lugar: t['Lugar exacto'],
-      prioridad: t['Prioridad'] || 'Media', urgente: t['Urgente'] === 'Sí', estado: t['Estado'] || 'Pendiente',
-      responsable: t['Responsable'], limite: fecha_(t['Fecha límite']), notas: t['Notas'],
-      creadoPor: t['Creado por'], creadoEl: marca_(t['Creado el']),
-      modificadoPor: t['Modificado por'], modificadoEl: marca_(t['Modificado el']), hechaEl: marca_(t['Hecha el']),
-      aviso: String(t['Aviso'] || '')
-    };
-  });
+  var tareas = filas_('Tareas').filter(function (t) { return t['ID']; }).map(mapearTarea_);
   var listas = {};
   Object.keys(LISTAS).forEach(function (k) {
     listas[k] = filas_(LISTAS[k].hoja).filter(function (f) { return f['ID'] && f['Nombre']; }).map(function (f) {
@@ -332,6 +337,22 @@ function vistoTarea_(id, quien) {
     escribirFila_('Tareas', fila, { 'Aviso': '' });
   }
   return { ok: true, datos: { id: id } };
+}
+
+function registrarAviso_(d, quien) {
+  var id = String((d && (d.tareaId || d.id)) || '');
+  var fila = buscarFila_('Tareas', 'ID', id);
+  if (!fila) throw new Error('Esa tarea ya no existe.');
+  var antes = leerFila_('Tareas', fila);
+  var resp = String(antes['Responsable'] || '');
+  if (!resp) throw new Error('Esta tarea no tiene responsable asignado.');
+  var esRecordatorio = String(antes['Aviso para'] || '') === resp;
+  var ahora = ahora_();
+  escribirFila_('Tareas', fila, { 'Aviso fecha': ahora, 'Aviso por': quien, 'Aviso para': resp });
+  var txt = quien + (esRecordatorio ? ' copió un recordatorio para ' : ' copió el aviso para ') + resp;
+  anotar_(id, quien, 'aviso', txt);
+  registrar_(quien, esRecordatorio ? 'Recordatorio WhatsApp' : 'Aviso WhatsApp', id, resp);
+  return { ok: true, datos: { id: id, tarea: mapearTarea_(leerFila_('Tareas', fila)) } };
 }
 
 function borrarTarea_(id, quien) {
@@ -691,10 +712,12 @@ function renombrarEnTareas_(lista, id, viejo, nuevo) {
   var sh = libro_().getSheetByName('Tareas');
   var v = sh.getDataRange().getValues();
   if (!L.enTareas) {
-    var cr = v[0].indexOf('Responsable'), ca = v[0].indexOf('Aviso');
+    var cr = v[0].indexOf('Responsable'), ca = v[0].indexOf('Aviso'), cpor = v[0].indexOf('Aviso por'), cpara = v[0].indexOf('Aviso para');
     for (var j = 1; j < v.length; j++) {
       if (String(v[j][cr]) === viejo) sh.getRange(j + 1, cr + 1).setValue(nuevo);
       if (ca >= 0 && String(v[j][ca]) === viejo) sh.getRange(j + 1, ca + 1).setValue(nuevo);
+      if (cpor >= 0 && String(v[j][cpor]) === viejo) sh.getRange(j + 1, cpor + 1).setValue(nuevo);
+      if (cpara >= 0 && String(v[j][cpara]) === viejo) sh.getRange(j + 1, cpara + 1).setValue(nuevo);
     }
     return;
   }
