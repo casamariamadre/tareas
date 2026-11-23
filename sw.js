@@ -1,6 +1,6 @@
 /* Guarda la app en el móvil para que abra rápido y sin conexión.
    Al publicar cambios, sube el número de VERSION para que los móviles se actualicen. */
-var VERSION = 'tar-v1.4.0';
+var VERSION = 'tar-v1.4.1';
 var ARCHIVOS = ['./', 'index.html', 'styles.css', 'app.js', 'config.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png', 'icons/favicon.png'];
 
@@ -15,10 +15,14 @@ self.addEventListener('activate', function (e) {
 self.addEventListener('fetch', function (e) {
   var url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin) return; // las llamadas a Google no se guardan
-  // Red primero (para recibir siempre la última versión); si no hay conexión, la copia guardada.
+  // Red primero (para recibir siempre la última versión); si no hay conexión, la copia guardada (ignoreSearch sirve index.html también con ?tarea=…).
   e.respondWith(fetch(e.request).then(function (r) {
     var copia = r.clone();
     caches.open(VERSION).then(function (c) { c.put(e.request, copia); });
     return r;
-  }).catch(function () { return caches.match(e.request, { ignoreSearch: true }); }));
+  }).catch(function () {
+    return caches.match(e.request, { ignoreSearch: true }).then(function (m) {
+      return m || (e.request.mode === 'navigate' ? caches.match('index.html') : undefined);
+    });
+  }));
 });

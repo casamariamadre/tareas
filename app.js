@@ -1,9 +1,9 @@
-/* Tareas y mantenimiento – tareas de la casa, fotos, seguimiento y agenda de proveedores (v1.4) */
+/* Tareas y mantenimiento – tareas de la casa, fotos, seguimiento y agenda de proveedores (v1.4.1) */
 (function () {
   'use strict';
   var C = window.CONFIG || {};
   var DEMO = !C.API_URL;
-  var VERSION = '1.4.0';
+  var VERSION = '1.4.1';
   var S = { pin: null, quien: null, datos: null, sinConexion: false,
             f: { estado: 'abiertas', cat: '', esp: '', texto: '', soloUrg: false, mias: false }, textoHechas: '',
             prov: { texto: '', inactivos: false, abiertos: {} },
@@ -27,13 +27,17 @@
     mapa: '<svg viewBox="0 0 24 24"><path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>',
     web: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>',
     camara: '<svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>',
-    galeria: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>'
+    galeria: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>',
+    copiar: '<svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>'
   };
 
   // ---------------- Almacenamiento local (con protección) ----------------
   function lsGet(k) { try { return JSON.parse(localStorage.getItem('nec:' + k)); } catch (e) { return null; } }
   function lsSet(k, v) { try { localStorage.setItem('nec:' + k, JSON.stringify(v)); } catch (e) {} }
   function lsDel(k) { try { localStorage.removeItem('nec:' + k); } catch (e) {} }
+  function ssGet(k) { try { return sessionStorage.getItem('nec:' + k); } catch (e) { return null; } }
+  function ssSet(k, v) { try { sessionStorage.setItem('nec:' + k, String(v)); } catch (e) {} }
+  function ssDel(k) { try { sessionStorage.removeItem('nec:' + k); } catch (e) {} }
 
   // ---------------- Utilidades ----------------
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
@@ -135,12 +139,12 @@
   /** Recarga datos. Si se está escribiendo una tarea NO se redibuja (para no perder lo escrito). */
   function recargar(silencioso) {
     if (!silencioso) cargando(true);
-    return api('inicial').then(function () { if (!editando() && $('#modal').hidden) pintar(); })
+    return api('inicial').then(function () { if (!abrirTareaPendiente() && !editando() && $('#modal').hidden) pintar(); })
       .catch(function (e) {
         if (e.codigo === 'CLAVE') return salir('El PIN ha cambiado. Vuelve a entrar.');
         if (e.codigo === 'PERSONA' || e.codigo === 'SIN_PIN') return salir(e.message);
         var c = lsGet('cache');
-        if (e.red && c) { S.datos = c.datos; S.sinConexion = true; avisoConexion(); if (!editando()) pintar(); }
+        if (e.red && c) { S.datos = c.datos; S.sinConexion = true; avisoConexion(); if (!abrirTareaPendiente() && !editando()) pintar(); }
         else if (!silencioso) toast(e.message, true);
       })
       .then(function () { cargando(false); });
@@ -194,6 +198,98 @@
     var n = nuevasMias().length;
     g.textContent = n ? String(n) : '';
     g.hidden = !n;
+  }
+  function esRecordatorioWa(t) { return !!(t && t.responsable && t.avisoPara === t.responsable); }
+  function enlaceTarea(id) { return location.origin + location.pathname + '?tarea=' + encodeURIComponent(id); }
+  function textoWa(t) {
+    return (esRecordatorioWa(t) ? 'Recordatorio: tienes una tarea pendiente: ' : 'Te han asignado una tarea: ') + enlaceTarea(t.id);
+  }
+  function mostrarWa(t) { return !!(t && t.responsable && t.responsable !== S.quien); }
+  function htmlBloqueWa(t) {
+    if (!mostrarWa(t)) return '';
+    var et = esRecordatorioWa(t) ? 'Copiar recordatorio para WhatsApp' : 'Copiar enlace para WhatsApp';
+    return '<div class="aviso-wa"><button type="button" class="btn sec ancho" data-copiar-wa="' + esc(t.id) + '">' + ICO.copiar + esc(et) + '</button>' +
+      '<p class="pie-wa">Pégalo en WhatsApp y envíaselo a <b>' + esc(t.responsable) + '</b>.</p></div>';
+  }
+  function copiarRespaldo(texto) {
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = texto;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.top = '-9999px';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      ta.setSelectionRange(0, texto.length);
+      var ok = document.execCommand('copy');
+      ta.remove();
+      return !!ok;
+    } catch (e) { return false; }
+  }
+  function copiarPortapapeles(texto) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(texto).then(function () { return true; }, function () { return copiarRespaldo(texto); });
+    }
+    return Promise.resolve(copiarRespaldo(texto));
+  }
+  function copiarAvisoWa(tid) {
+    var t = tarea(tid); if (!t) return;
+    var txt = textoWa(t);
+    // 1.º Copiar dentro del mismo toque (compatible con iPhone/Safari y Android)
+    copiarPortapapeles(txt).then(function () {
+      toast('Texto copiado');
+      // 2.º Registrar en la hoja
+      if (S.sinConexion) {
+        setTimeout(function () { toast('Copiado, pero no se pudo anotar (sin conexión)'); }, 1200);
+        return;
+      }
+      api('registrarAviso', { tareaId: t.id }).then(function () {
+        if (!editando() && $('#modal').hidden) pintar();
+        else {
+          var tAct = tarea(t.id);
+          if (tAct) $$('[data-copiar-wa="' + t.id + '"]').forEach(function (b) {
+            b.innerHTML = ICO.copiar + esc(esRecordatorioWa(tAct) ? 'Copiar recordatorio para WhatsApp' : 'Copiar enlace para WhatsApp');
+          });
+        }
+      }).catch(function () {
+        toast('Copiado, pero no se pudo anotar (sin conexión)');
+      });
+    });
+  }
+  function enlazarWa(el) {
+    $$('[data-copiar-wa]', el || document).forEach(function (b) {
+      b.onclick = function () { copiarAvisoWa(b.dataset.copiarWa); };
+    });
+  }
+  function modalAvisoGuardado(tid, alCerrar) {
+    var t = tarea(tid);
+    if (!t || !mostrarWa(t)) { if (alCerrar) alCerrar(); return; }
+    modal('<h2>Tarea asignada a ' + esc(t.responsable) + '</h2>' +
+      '<p class="sub" style="margin:0 0 12px"><b>' + esc(t.titulo) + '</b></p>' +
+      htmlBloqueWa(t) +
+      '<div class="fila-btns" style="margin-top:14px"><button class="btn borde ancho" data-r="0">Listo</button></div>',
+      function (ev, cerrar) {
+        var b = ev.target.closest('[data-r]');
+        if (b && b.dataset.r === '0') { cerrar(); if (alCerrar) alCerrar(); }
+      });
+    enlazarWa($('#modal'));
+    $('#modal').addEventListener('click', function f(e) {
+      if (e.target === this) { this.removeEventListener('click', f); if (alCerrar) alCerrar(); }
+    });
+  }
+  function abrirTareaPendiente() {
+    var tid = ssGet('tareaEnlace');
+    if (!tid || !S.datos) return false;
+    ssDel('tareaEnlace');
+    if (tarea(tid)) {
+      ir('tarea/' + encodeURIComponent(tid));
+    } else {
+      toast('Esta tarea ya no existe', true);
+      ir('lista');
+    }
+    return true;
   }
 
   // ---------------- Navegación ----------------
@@ -273,6 +369,7 @@
       cargando(true);
       api('inicial').then(function () {
         lsSet('quien', nombre); lsSet('pin', pin);
+        if (abrirTareaPendiente()) return;
         if (!location.hash || location.hash === '#/') location.hash = '/lista'; else pintar();
       }).catch(function (e) {
         S.quien = null; S.pin = null;
@@ -405,7 +502,8 @@
       dato('Fecha límite', t.limite ? '<span' + (vencida(t) ? ' style="color:var(--tel)"' : '') + '>' + legible(t.limite) + '</span>' : '') +
       '</div>' +
       (t.descripcion ? '<h3>Descripción</h3><p class="texto-largo">' + esc(t.descripcion) + '</p>' : '') +
-      (t.notas ? '<h3>Notas</h3><p class="texto-largo">' + esc(t.notas) + '</p>' : '') + '</div>' +
+      (t.notas ? '<h3>Notas</h3><p class="texto-largo">' + esc(t.notas) + '</p>' : '') +
+      (mostrarWa(t) ? '<div style="margin-top:12px">' + htmlBloqueWa(t) + '</div>' : '') + '</div>' +
       '<div class="tarjeta estado-rapido"><h2>Estado</h2><div class="segmento cuatro" id="dEstado">' +
       ESTADOS.map(function (e) { return '<button data-e="' + e + '" class="e-' + claseEstado(e) + (t.estado === e ? ' activo' : '') + '">' + e + '</button>'; }).join('') +
       '</div></div>' +
@@ -415,6 +513,7 @@
       (t.modificadoEl && t.modificadoEl !== t.creadoEl ? '<br>Último cambio: ' + esc(t.modificadoPor) + ', ' + legible(t.modificadoEl) : '') +
       (t.hechaEl ? '<br>Hecha el ' + legible(t.hechaEl) : '') + '</p>';
     enlazarVolver();
+    enlazarWa(vista);
     $('#dEstado').onclick = function (e) {
       var b = e.target.closest('button'); if (!b || b.dataset.e === t.estado) return;
       guardar('cambiarEstado', { id: t.id, estado: b.dataset.e }, 'Estado: ' + b.dataset.e).then(function () { pintar(); }, function () {});
@@ -618,7 +717,7 @@
 
   // ---------------- Seguimiento (avances de cada tarea, plegados por día) ----------------
   var DIAS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
-  var ICO_SEG = { alta: '＋', estado: '⇄', cambio: '✎', foto: '📷' };
+  var ICO_SEG = { alta: '＋', estado: '⇄', cambio: '✎', foto: '📷', aviso: '💬' };
   function nombreDia(d) {
     var hoy = hoyTxt();
     if (d === hoy) return 'Hoy';
@@ -743,12 +842,18 @@
     $('#nGuardar').onclick = function () {
       v.titulo = $('#nTitulo').value.trim();
       if (!v.titulo) { $('#nError').textContent = 'Escribe qué hace falta.'; $('#nTitulo').focus(); return; }
+      var respAntes = t ? (t.responsable || '') : '';
       v.espacioId = $('#nEsp').value; v.categoriaId = $('#nCat').value; v.lugar = $('#nLugar').value.trim();
       v.responsable = $('#nResp').value; v.limite = $('#nLimite').value; v.descripcion = $('#nDesc').value.trim();
       if ($('#nNotas')) v.notas = $('#nNotas').value.trim();
+      var pedirWa = !!(v.responsable && v.responsable !== S.quien && v.responsable !== respAntes);
       guardar('guardarTarea', { tarea: v }, t ? 'Cambios guardados' : 'Apuntada').then(function (d) {
-        if (t) { history.length > 1 && historial > 0 ? history.back() : ir('tarea/' + encodeURIComponent(t.id)); }
-        else ir('lista');
+        var salirForm = function () {
+          if (t) { history.length > 1 && historial > 0 ? history.back() : ir('tarea/' + encodeURIComponent(t.id)); }
+          else ir('lista');
+        };
+        if (pedirWa && d && d.id) modalAvisoGuardado(d.id, salirForm);
+        else salirForm();
       }, function (e) { if (e && e.message !== 'sin conexión') $('#nError').textContent = e.message; });
     };
     if (!t) setTimeout(function () { $('#nTitulo') && $('#nTitulo').focus(); }, 50);
@@ -946,6 +1051,15 @@
   }
 
   // ---------------- Arranque ----------------
+  (function () {
+    try {
+      var q = new URLSearchParams(location.search), tid = q.get('tarea');
+      if (tid) {
+        ssSet('tareaEnlace', tid.trim());
+        history.replaceState(null, '', location.pathname + location.hash);
+      }
+    } catch (e) {}
+  })();
   $('#tituloCasa').textContent = C.NOMBRE_CASA || 'Tareas';
   $('#menu').onclick = function (e) { var b = e.target.closest('button[data-ir]'); if (b) ir(b.dataset.ir); };
   $('#btnRecargar').onclick = function () { recargar(); };
@@ -957,8 +1071,8 @@
   S.quien = lsGet('quien'); S.pin = lsGet('pin');
   if (S.quien && S.pin) {
     var c = lsGet('cache');
-    if (c) { S.datos = c.datos; pintar(); }
-    recargar(!!c);
+    if (c && !ssGet('tareaEnlace')) { S.datos = c.datos; pintar(); }
+    recargar(!!(c && !ssGet('tareaEnlace')));
   } else pintarLogin();
 
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(function () {});
