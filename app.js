@@ -1,11 +1,12 @@
-/* Tareas y mantenimiento – tareas de la casa, fotos, seguimiento y agenda de proveedores (v1.4.3) */
+/* Tareas y mantenimiento – tareas de la casa, fotos, seguimiento y agenda de proveedores (v1.4.4) */
 (function () {
   'use strict';
   var C = window.CONFIG || {};
   var DEMO = !C.API_URL;
-  var VERSION = '1.4.3';
+  var VERSION = '1.4.4';
   var S = { pin: null, quien: null, datos: null, sinConexion: false,
-            f: { estado: 'abiertas', cat: '', esp: '', texto: '', soloUrg: false, mias: false }, textoHechas: '',
+            f: { estado: 'abiertas', cat: '', esp: '', resp: '', agrupar: 'importancia', texto: '', soloUrg: false },
+            gruposLista: {}, detEdit: null, textoHechas: '',
             prov: { texto: '', inactivos: false, abiertos: {} },
             fotosF: 'sin', seg: {}, borrador: {}, nuevasFotos: [], driveNoVa: false };
   var $ = function (s, el) { return (el || document).querySelector(s); };
@@ -134,7 +135,10 @@
     } else a.hidden = true;
   }
 
-  function editando() { var v = ruta().vista; return v === 'nueva' || v === 'editar'; }
+  function editando() {
+    var v = ruta().vista;
+    return v === 'nueva' || v === 'editar' || (v === 'tarea' && S.detEdit && S.detEdit.sucio);
+  }
 
   /** Recarga datos. Si se está escribiendo una tarea NO se redibuja (para no perder lo escrito). */
   function recargar(silencioso) {
@@ -293,16 +297,35 @@
   }
 
   // ---------------- Navegación ----------------
-  var TITULOS = { lista: 'Pendientes', nueva: 'Nueva necesidad', editar: 'Editar', tarea: 'Necesidad', hechas: 'Hechas', fotos: 'Fotos', proveedores: 'Proveedores', ajustes: 'Ajustes' };
+  var TITULOS = { lista: 'Pendientes', nueva: 'Nueva tarea', editar: 'Tarea', tarea: 'Tarea', hechas: 'Hechas', fotos: 'Fotos', proveedores: 'Proveedores', ajustes: 'Ajustes' };
   function ruta() {
     var h = location.hash.replace(/^#\/?/, '');
     var seg = h.split('?')[0].split('/');
     return { vista: seg[0] || 'lista', id: seg[1] ? decodeURIComponent(seg[1]) : null };
   }
-  function ir(h) { if (location.hash === '#/' + h) pintar(); else location.hash = '/' + h; }
+  function comprobarSalirDetalle() {
+    if (S.detEdit && S.detEdit.sucio) {
+      return confirmar('Tienes cambios sin guardar en esta tarea. ¿Salir y descartarlos?', 'Descartar y salir', true).then(function (ok) {
+        if (ok) S.detEdit = null;
+        return ok;
+      });
+    }
+    return Promise.resolve(true);
+  }
+  function ir(h) {
+    comprobarSalirDetalle().then(function (ok) {
+      if (!ok) return;
+      if (location.hash === '#/' + h) pintar(); else location.hash = '/' + h;
+    });
+  }
   var historial = 0;
   window.addEventListener('hashchange', function () { historial++; });
-  function volver() { if (historial > 0 && history.length > 1) history.back(); else ir('lista'); }
+  function volver() {
+    comprobarSalirDetalle().then(function (ok) {
+      if (!ok) return;
+      if (historial > 0 && history.length > 1) history.back(); else { if (location.hash === '#/lista') pintar(); else location.hash = '/lista'; }
+    });
+  }
   function botonVolver() { return '<button class="volver" id="bVolver"><span>‹</span> Volver</button>'; }
   function enlazarVolver() { var b = $('#bVolver'); if (b) b.onclick = volver; }
 
@@ -310,6 +333,21 @@
     if (!S.quien) return pintarLogin();
     if (!S.datos) return;
     var r = ruta();
+    if (r.vista === 'editar' && r.id) {
+      history.replaceState(null, '', location.pathname + '#/tarea/' + encodeURIComponent(r.id));
+      r = ruta();
+    }
+    if (r.vista !== 'tarea' || (S.detEdit && S.detEdit.id !== r.id)) {
+      if (S.detEdit && S.detEdit.sucio && S.rutaPintada && S.rutaPintada !== location.hash) {
+        var hashPrevio = S.rutaPintada;
+        history.replaceState(null, '', location.pathname + hashPrevio);
+        comprobarSalirDetalle().then(function (ok) {
+          if (ok) { location.hash = '/' + r.vista + (r.id ? '/' + encodeURIComponent(r.id) : ''); }
+        });
+        return;
+      }
+      if (r.vista !== 'tarea') S.detEdit = null;
+    }
     $('#menu').hidden = false; $('#btnRecargar').hidden = false;
     if ($('#btnImprimir')) $('#btnImprimir').hidden = r.vista !== 'lista';
     actualizarGlobo();
@@ -324,7 +362,6 @@
     switch (r.vista) {
       case 'tarea': pintarDetalle(r.id); break;
       case 'nueva': pintarFormulario(null); break;
-      case 'editar': pintarFormulario(r.id); break;
       case 'hechas': pintarHechas(); break;
       case 'fotos': pintarFotos(); break;
       case 'proveedores': pintarProveedores(); break;
@@ -417,6 +454,27 @@
       return '<option value="' + esc(e.id) + '"' + (e.id === sel ? ' selected' : '') + '>' + esc(e.codigo ? e.codigo + ' · ' + e.nombre : e.nombre) + '</option>';
     }).join('');
   }
+  function opcionesResponsableFiltro(sel, abiertas) {
+    var miasCount = abiertas.filter(function (t) { return t.responsable === S.quien; }).length;
+    var nuevasCount = nuevasMias().length;
+    var etYo = 'Yo (' + S.quien + ')' + (miasCount ? ' · ' + miasCount : '') + (nuevasCount ? ' (' + nuevasCount + (nuevasCount === 1 ? ' nueva)' : ' nuevas)') : '');
+    var otros = lista('responsables').filter(function (r) { return (r.activo || r.nombre === sel) && r.nombre !== S.quien; });
+    return '<option value="">Responsable: Todos</option>' +
+      (S.quien ? '<option value="__yo__"' + (sel === '__yo__' ? ' selected' : '') + '>' + esc(etYo) + '</option>' : '') +
+      otros.map(function (r) { return '<option value="' + esc(r.nombre) + '"' + (sel === r.nombre ? ' selected' : '') + '>' + esc(r.nombre) + '</option>'; }).join('') +
+      '<option value="__sin__"' + (sel === '__sin__' ? ' selected' : '') + '>Sin asignar</option>';
+  }
+  function opcionesAgrupar(sel) {
+    return CRITERIOS_PDF.map(function (c) {
+      return '<option value="' + c.id + '"' + (c.id === sel ? ' selected' : '') + '>Agrupar por: ' + esc(c.nombre) + '</option>';
+    }).join('');
+  }
+  function coincideResp(t, fResp) {
+    if (!fResp) return true;
+    if (fResp === '__yo__') return t.responsable === S.quien;
+    if (fResp === '__sin__') return !t.responsable;
+    return t.responsable === fResp;
+  }
   function coincide(t, texto) {
     if (!texto) return true;
     var q = sinAcentos(texto);
@@ -426,45 +484,63 @@
     var f = S.f;
     var abiertas = tareas().filter(function (t) { return t.estado !== 'Hecha'; });
     var base = abiertas.filter(function (t) {
-      return (!f.cat || t.categoriaId === f.cat) && (!f.esp || t.espacioId === f.esp) && (!f.soloUrg || t.urgente) && (!f.mias || t.responsable === S.quien) && coincide(t, f.texto);
+      return (!f.cat || t.categoriaId === f.cat) && (!f.esp || t.espacioId === f.esp) && (!f.soloUrg || t.urgente) && coincideResp(t, f.resp) && coincide(t, f.texto);
     });
     return ordenar(base.filter(function (t) { return f.estado === 'abiertas' || t.estado === f.estado; }));
   }
-  function htmlGruposLista(visibles) {
-    return agruparParaPdf(visibles, 'importancia').map(function (g) {
-      return '<div class="grupo-tareas"><div class="enc-grupo ' + g.clase + '"><span>' + esc(g.tituloLista) + '</span><small>' + g.items.length + '</small></div>' +
-        g.items.map(tarjeta).join('') + '</div>';
-    }).join('');
+  function estadoGruposLista(criterio) {
+    var todo = lsGet('gruposLista') || {};
+    return todo[criterio] || {};
+  }
+  function guardarEstadoGrupoLista(criterio, clave, abierto) {
+    var todo = lsGet('gruposLista') || {};
+    todo[criterio] = todo[criterio] || {};
+    todo[criterio][clave] = !!abierto;
+    lsSet('gruposLista', todo);
+  }
+  function htmlGruposLista(visibles, criterio, buscando) {
+    var mem = estadoGruposLista(criterio);
+    return '<div class="grupos-lista">' + agruparParaPdf(visibles, criterio).map(function (g) {
+      var tit = g.tituloLista || g.titulo;
+      var clave = g.titulo;
+      var abierto = buscando ? true : (mem[clave] != null ? mem[clave] : true);
+      return '<details class="grupo-lista' + (g.clase ? ' ' + g.clase : '') + '" data-gclave="' + esc(clave) + '"' + (abierto ? ' open' : '') + '>' +
+        '<summary><span>' + esc(tit) + '</span><small>' + g.items.length + '</small></summary>' +
+        '<div class="grupo-lista-cuerpo">' + g.items.map(tarjeta).join('') + '</div></details>';
+    }).join('') + '</div>';
   }
   function pintarLista() {
     var f = S.f;
+    var agrGuardado = lsGet('agruparLista');
+    if (agrGuardado && CRITERIOS_PDF.some(function (c) { return c.id === agrGuardado; })) f.agrupar = agrGuardado;
     var abiertas = tareas().filter(function (t) { return t.estado !== 'Hecha'; });
     var nuevas = nuevasMias();
-    var miasCount = abiertas.filter(function (t) { return t.responsable === S.quien; }).length;
     var base = abiertas.filter(function (t) {
-      return (!f.cat || t.categoriaId === f.cat) && (!f.esp || t.espacioId === f.esp) && (!f.soloUrg || t.urgente) && (!f.mias || t.responsable === S.quien) && coincide(t, f.texto);
+      return (!f.cat || t.categoriaId === f.cat) && (!f.esp || t.espacioId === f.esp) && (!f.soloUrg || t.urgente) && coincideResp(t, f.resp) && coincide(t, f.texto);
     });
     var cuenta = function (e) { return base.filter(function (t) { return e === 'abiertas' || t.estado === e; }).length; };
     var visibles = ordenar(base.filter(function (t) { return f.estado === 'abiertas' || t.estado === f.estado; }));
-    var hayFiltro = f.cat || f.esp || f.soloUrg || f.mias || f.texto;
+    var hayFiltro = f.cat || f.esp || f.resp || f.soloUrg || f.texto;
+    var viendoMias = f.resp === '__yo__';
     vista.innerHTML =
-      (nuevas.length ? '<button class="aviso-asig" id="fAvisoAsig"><span>' + textoAvisoAsignadas(nuevas) + '</span><small>' + (f.mias ? 'Viendo mis tareas' : 'Ver mis tareas') + '</small></button>' : '') +
+      (nuevas.length ? '<button class="aviso-asig" id="fAvisoAsig"><span>' + textoAvisoAsignadas(nuevas) + '</span><small>' + (viendoMias ? 'Viendo mis tareas' : 'Ver mis tareas') + '</small></button>' : '') +
       '<div class="buscador">' + ICO.buscar + '<input class="entrada" id="fTexto" type="search" placeholder="Buscar…" value="' + esc(f.texto) + '"></div>' +
       '<div class="segmento cuatro" id="fEstado">' +
       [['abiertas', 'Todas'], ['Pendiente', 'Pendientes'], ['En curso', 'En curso'], ['Esperando', 'Esperando']].map(function (x) {
         return '<button data-e="' + x[0] + '" class="' + (f.estado === x[0] ? 'activo' : '') + '">' + x[1] + '<small>' + cuenta(x[0]) + '</small></button>';
       }).join('') + '</div>' +
       '<div class="filtros"><select class="entrada' + (f.esp ? ' activo' : '') + '" id="fEsp">' + opciones('espacios', f.esp, 'Todos los espacios') + '</select>' +
-      '<select class="entrada' + (f.cat ? ' activo' : '') + '" id="fCat">' + opciones('categorias', f.cat, 'Todas las categorías') + '</select></div>' +
-      '<div class="resumen"><div class="resumen-checks"><label class="sub check"><input type="checkbox" id="fMias"' + (f.mias ? ' checked' : '') + '> Mis tareas' + (miasCount ? ' (' + miasCount + ')' : '') + '</label>' +
-      '<label class="sub check"><input type="checkbox" id="fUrg"' + (f.soloUrg ? ' checked' : '') + '> Solo urgentes</label></div>' +
+      '<select class="entrada' + (f.cat ? ' activo' : '') + '" id="fCat">' + opciones('categorias', f.cat, 'Todas las categorías') + '</select>' +
+      '<select class="entrada' + (f.resp ? ' activo' : '') + '" id="fResp">' + opcionesResponsableFiltro(f.resp, abiertas) + '</select>' +
+      '<select class="entrada' + (f.agrupar !== 'importancia' ? ' activo' : '') + '" id="fAgrupar">' + opcionesAgrupar(f.agrupar || 'importancia') + '</select></div>' +
+      '<div class="resumen"><div class="resumen-checks"><label class="sub check"><input type="checkbox" id="fUrg"' + (f.soloUrg ? ' checked' : '') + '> Solo urgentes</label></div>' +
       (hayFiltro ? '<button class="limpiar" id="fLimpiar">Quitar filtros</button>' : '') + '</div>' +
-      (visibles.length ? htmlGruposLista(visibles)
-        : '<div class="vacio">' + (abiertas.length ? 'Nada con estos filtros.' : '¡Todo al día! No hay necesidades pendientes.') + '</div>');
+      (visibles.length ? htmlGruposLista(visibles, f.agrupar || 'importancia', !!f.texto)
+        : '<div class="vacio">' + (abiertas.length ? 'Nada con estos filtros.' : '¡Todo al día! No hay tareas pendientes.') + '</div>');
     var tTexto;
     if ($('#fAvisoAsig')) $('#fAvisoAsig').onclick = function () {
       if (nuevas.length === 1) ir('tarea/' + encodeURIComponent(nuevas[0].id));
-      else { S.f.mias = true; S.f.estado = 'abiertas'; pintarLista(); }
+      else { S.f.resp = '__yo__'; S.f.estado = 'abiertas'; pintarLista(); }
     };
     $('#fTexto').oninput = function () {
       var v = this.value; clearTimeout(tTexto);
@@ -473,9 +549,15 @@
     $('#fEstado').onclick = function (e) { var b = e.target.closest('button'); if (b) { S.f.estado = b.dataset.e; pintarLista(); } };
     $('#fEsp').onchange = function () { S.f.esp = this.value; pintarLista(); };
     $('#fCat').onchange = function () { S.f.cat = this.value; pintarLista(); };
-    $('#fMias').onchange = function () { S.f.mias = this.checked; pintarLista(); };
+    $('#fResp').onchange = function () { S.f.resp = this.value; pintarLista(); };
+    $('#fAgrupar').onchange = function () { S.f.agrupar = this.value; lsSet('agruparLista', this.value); pintarLista(); };
     $('#fUrg').onchange = function () { S.f.soloUrg = this.checked; pintarLista(); };
-    if ($('#fLimpiar')) $('#fLimpiar').onclick = function () { S.f = { estado: S.f.estado, cat: '', esp: '', texto: '', soloUrg: false, mias: false }; pintarLista(); };
+    if ($('#fLimpiar')) $('#fLimpiar').onclick = function () { S.f = { estado: S.f.estado, cat: '', esp: '', resp: '', agrupar: S.f.agrupar || 'importancia', texto: '', soloUrg: false }; pintarLista(); };
+    $$('details.grupo-lista', vista).forEach(function (d) {
+      d.addEventListener('toggle', function () {
+        if (!S.f.texto) guardarEstadoGrupoLista(S.f.agrupar || 'importancia', d.dataset.gclave, d.open);
+      });
+    });
     enlazarTarjetas();
   }
 
@@ -485,7 +567,7 @@
       .sort(function (a, b) { return String(b.hechaEl).localeCompare(String(a.hechaEl)); });
     vista.innerHTML =
       '<div class="buscador">' + ICO.buscar + '<input class="entrada" id="hTexto" type="search" placeholder="Buscar en hechas…" value="' + esc(S.textoHechas) + '"></div>' +
-      '<p class="sub" style="margin:0 0 8px">' + lista_.length + ' necesidad' + (lista_.length === 1 ? '' : 'es') + ' resuelta' + (lista_.length === 1 ? '' : 's') + ', de la más reciente a la más antigua.</p>' +
+      '<p class="sub" style="margin:0 0 8px">' + lista_.length + ' tarea' + (lista_.length === 1 ? '' : 's') + ' resuelta' + (lista_.length === 1 ? '' : 's') + ', de la más reciente a la más antigua.</p>' +
       (lista_.length ? lista_.map(tarjeta).join('') : '<div class="vacio">Aún no hay nada marcado como hecho.</div>');
     var tTexto;
     $('#hTexto').oninput = function () {
@@ -495,31 +577,86 @@
     enlazarTarjetas();
   }
 
-  // ---------------- Detalle ----------------
+  // ---------------- Detalle (vista única editable, D25) ----------------
+  function diferenciasTarea(orig, bor) {
+    var campos = ['titulo', 'espacioId', 'lugar', 'categoriaId', 'prioridad', 'responsable', 'limite', 'descripcion', 'notas'];
+    if (!!orig.urgente !== !!bor.urgente) return true;
+    return campos.some(function (k) { return String(orig[k] || '').trim() !== String(bor[k] || '').trim(); });
+  }
   function pintarDetalle(id) {
     var t = tarea(id);
-    if (!t) { vista.innerHTML = botonVolver() + '<div class="vacio">Esta necesidad ya no existe.</div>'; return enlazarVolver(); }
+    if (!t) { S.detEdit = null; vista.innerHTML = botonVolver() + '<div class="vacio">Esta tarea ya no existe.</div>'; return enlazarVolver(); }
     if (esNuevaMia(t) && !S.sinConexion) {
       t.aviso = '';
       actualizarGlobo();
       api('vistoTarea', { id: t.id }).catch(function () {});
     }
-    var dato = function (k, v) { return v ? '<div class="dato"><span>' + k + '</span><span>' + v + '</span></div>' : ''; };
+    if (!S.detEdit || S.detEdit.id !== t.id || !S.detEdit.sucio) {
+      S.detEdit = { id: t.id, v: JSON.parse(JSON.stringify(t)), campo: (S.detEdit && S.detEdit.id === t.id) ? S.detEdit.campo : null, sucio: false };
+    }
+    var ed = S.detEdit, v = ed.v, campo = ed.campo;
+    ed.sucio = diferenciasTarea(t, v);
+    var respList = lista('responsables').filter(function (r) { return r.activo || r.nombre === v.responsable; }).map(function (r) { return r.nombre; });
+    if (v.responsable && respList.indexOf(v.responsable) < 0) respList.push(v.responsable);
+
+    var nomEsp = (function () {
+      var e = elemento('espacios', v.espacioId);
+      return e ? ((e.codigo ? e.codigo + ' · ' : '') + e.nombre) : (v.espacio || '');
+    })();
+    var nomCat = (function () {
+      var c = elemento('categorias', v.categoriaId);
+      return c ? c.nombre : (v.categoria || '');
+    })();
+    var filaEditable = function (clave, et, valorHtml, vacioTxt, editorHtml) {
+      if (campo === clave) {
+        return '<div class="dato editable editando-campo" data-ed="' + clave + '"><span>' + et + '</span>' + editorHtml + '</div>';
+      }
+      var tiene = !!valorHtml;
+      return '<div class="dato editable" data-ed="' + clave + '"><span>' + et + '</span>' +
+        '<span class="val' + (tiene ? '' : ' vacio-val') + '">' + (tiene ? valorHtml : esc(vacioTxt)) + ' <small class="lapiz">✎</small></span></div>';
+    };
+
     vista.innerHTML = botonVolver() +
-      '<div class="tarjeta det ' + clasePrio(t) + '"><div class="det-cab"><h2>' + esc(t.titulo) + '</h2>' +
-      '<div class="det-acc"><button class="btn sec mini" id="dEditar">' + ICO.editar + 'Editar</button>' +
-      '<button class="btn peligro discreto" id="dBorrar">' + ICO.borrar + 'Borrar</button></div></div>' + etiquetas(t, false) +
+      '<div class="tarjeta det ' + clasePrio(v) + '"><div class="det-cab">' +
+      (campo === 'titulo'
+        ? '<input class="entrada det-tit-in" id="ed_titulo" maxlength="150" value="' + esc(v.titulo) + '">'
+        : '<button type="button" class="det-tit-btn" data-ed="titulo"><span>' + esc(v.titulo) + '</span><small>✎</small></button>') +
+      '<div class="det-acc"><button class="btn peligro discreto" id="dBorrar">' + ICO.borrar + 'Borrar</button></div></div>' +
+      etiquetas(v, false) +
       '<div style="margin-top:10px">' +
-      dato('Espacio', esc((codigoEspacio(t) ? codigoEspacio(t) + ' · ' : '') + nombreEspacio(t))) +
-      dato('Lugar exacto', esc(t.lugar)) +
-      dato('Categoría', esc(nombreCategoria(t))) +
-      dato('Prioridad', esc(t.prioridad) + (t.urgente ? ' · <span style="color:var(--tel)">urgente</span>' : '')) +
-      dato('Responsable', esc(t.responsable)) +
-      dato('Fecha límite', t.limite ? '<span' + (vencida(t) ? ' style="color:var(--tel)"' : '') + '>' + legible(t.limite) + '</span>' : '') +
+      filaEditable('espacioId', 'Espacio', esc(nomEsp), 'Sin espacio',
+        '<select class="in-linea" id="ed_espacioId">' + opciones('espacios', v.espacioId, '— Sin espacio —') + '</select>') +
+      filaEditable('lugar', 'Lugar exacto', esc(v.lugar), 'Añadir lugar…',
+        '<input class="in-linea" id="ed_lugar" maxlength="120" placeholder="Ej.: Hab. 12" value="' + esc(v.lugar) + '">') +
+      filaEditable('categoriaId', 'Categoría', esc(nomCat), 'Sin categoría',
+        '<select class="in-linea" id="ed_categoriaId">' + opciones('categorias', v.categoriaId, '— Sin categoría —') + '</select>') +
+      (campo === 'prioridad'
+        ? '<div class="prio-inline" data-ed="prioridad"><span style="font-size:13px;color:var(--texto-2);font-weight:600">Prioridad y urgencia</span>' +
+          '<div class="fila-prio"><div class="segmento tres prioridad" id="ed_prio">' +
+          PRIORIDADES.map(function (p) { return '<button type="button" data-p="' + p + '" class="p-' + p.toLowerCase() + (v.prioridad === p ? ' activo' : '') + '">' + p + '</button>'; }).join('') +
+          '</div><label class="urg-chip' + (v.urgente ? ' on' : '') + '" id="ed_urgL"><input type="checkbox" id="ed_urg"' + (v.urgente ? ' checked' : '') + '> Urgente</label></div></div>'
+        : filaEditable('prioridad', 'Prioridad', esc(v.prioridad) + (v.urgente ? ' · <span style="color:var(--tel)">urgente</span>' : ''), 'Media', '')) +
+      filaEditable('responsable', 'Responsable', esc(v.responsable), 'Sin asignar',
+        '<select class="in-linea" id="ed_responsable"><option value="">Sin asignar</option>' +
+        respList.map(function (n) { return '<option value="' + esc(n) + '"' + (n === v.responsable ? ' selected' : '') + '>' + esc(n) + '</option>'; }).join('') + '</select>') +
+      filaEditable('limite', 'Fecha límite',
+        v.limite ? '<span' + (vencida(v) ? ' style="color:var(--tel)"' : '') + '>' + legible(v.limite) + '</span>' : '', 'Sin fecha',
+        '<input class="in-linea" id="ed_limite" type="date" value="' + esc(v.limite) + '">') +
       '</div>' +
-      (t.descripcion ? '<h3>Descripción</h3><p class="texto-largo">' + esc(t.descripcion) + '</p>' : '') +
-      (t.notas ? '<h3>Notas</h3><p class="texto-largo">' + esc(t.notas) + '</p>' : '') +
-      (mostrarWa(t) ? '<div style="margin-top:12px">' + htmlBloqueWa(t) + '</div>' : '') + '</div>' +
+      '<div class="bloque-ed" data-ed="descripcion"><h3><span>Descripción</span><small>✎</small></h3>' +
+      (campo === 'descripcion'
+        ? '<textarea class="entrada" id="ed_descripcion" maxlength="2000" placeholder="Detalles, medidas, material necesario…">' + esc(v.descripcion) + '</textarea>'
+        : (v.descripcion ? '<p class="texto-largo">' + esc(v.descripcion) + '</p>' : '<p class="vacio-bloque">Toca para añadir descripción…</p>')) +
+      '</div>' +
+      '<div class="bloque-ed" data-ed="notas"><h3><span>Notas</span><small>✎</small></h3>' +
+      (campo === 'notas'
+        ? '<textarea class="entrada" id="ed_notas" maxlength="2000" placeholder="Ej.: Llamado al fontanero el lunes">' + esc(v.notas) + '</textarea>'
+        : (v.notas ? '<p class="texto-largo">' + esc(v.notas) + '</p>' : '<p class="vacio-bloque">Toca para añadir notas…</p>')) +
+      '</div>' +
+      '<p class="error-txt" id="dError"></p>' +
+      (!ed.sucio && mostrarWa(t) ? '<div style="margin-top:12px">' + htmlBloqueWa(t) + '</div>' : '') +
+      (ed.sucio ? '<div class="pie-cambios" id="dBarraCambios"><button type="button" class="btn borde" id="dDescartar">Descartar</button><button type="button" class="btn" id="dGuardar">Guardar cambios</button></div>' : '') +
+      '</div>' +
       '<div class="tarjeta estado-rapido"><h2>Estado</h2><div class="segmento cuatro" id="dEstado">' +
       ESTADOS.map(function (e) { return '<button data-e="' + e + '" class="e-' + claseEstado(e) + (t.estado === e ? ' activo' : '') + '">' + e + '</button>'; }).join('') +
       '</div></div>' +
@@ -527,19 +664,131 @@
       '<p class="pie-meta">Apuntada por ' + esc(t.creadoPor || '—') + ' el ' + legible(t.creadoEl) +
       (t.modificadoEl && t.modificadoEl !== t.creadoEl ? '<br>Último cambio: ' + esc(t.modificadoPor) + ', ' + legible(t.modificadoEl) : '') +
       (t.hechaEl ? '<br>Hecha el ' + legible(t.hechaEl) : '') + '</p>';
+
     enlazarVolver();
     enlazarWa(vista);
+
+    function recogerCampoActivo() {
+      if ($('#ed_titulo')) v.titulo = $('#ed_titulo').value;
+      if ($('#ed_espacioId')) v.espacioId = $('#ed_espacioId').value;
+      if ($('#ed_lugar')) v.lugar = $('#ed_lugar').value;
+      if ($('#ed_categoriaId')) v.categoriaId = $('#ed_categoriaId').value;
+      if ($('#ed_responsable')) v.responsable = $('#ed_responsable').value;
+      if ($('#ed_limite')) v.limite = $('#ed_limite').value;
+      if ($('#ed_descripcion')) v.descripcion = $('#ed_descripcion').value;
+      if ($('#ed_notas')) v.notas = $('#ed_notas').value;
+      ed.sucio = diferenciasTarea(t, v);
+    }
+
+    // Abrir un campo al tocarlo
+    $$('[data-ed]', vista).forEach(function (el) {
+      el.onclick = function (ev) {
+        if (ev.target.closest('input, select, textarea, .segmento, .urg-chip')) return;
+        recogerCampoActivo();
+        var nuevoCampo = el.dataset.ed;
+        ed.campo = (ed.campo === nuevoCampo && nuevoCampo === 'prioridad') ? null : nuevoCampo;
+        pintarDetalle(t.id);
+        setTimeout(function () {
+          var inp = $('#ed_' + ed.campo);
+          if (inp && inp.focus) {
+            inp.focus();
+            if (inp.setSelectionRange && inp.type === 'text') inp.setSelectionRange(inp.value.length, inp.value.length);
+          }
+        }, 20);
+      };
+    });
+
+    // Eventos del control activo
+    ['espacioId', 'categoriaId', 'responsable', 'limite'].forEach(function (k) {
+      var sel = $('#ed_' + k);
+      if (!sel) return;
+      sel.onchange = function () {
+        v[k] = this.value;
+        ed.campo = null;
+        ed.sucio = diferenciasTarea(t, v);
+        pintarDetalle(t.id);
+      };
+      sel.onblur = function () {
+        v[k] = this.value;
+        ed.campo = null;
+        ed.sucio = diferenciasTarea(t, v);
+        pintarDetalle(t.id);
+      };
+    });
+    ['titulo', 'lugar', 'descripcion', 'notas'].forEach(function (k) {
+      var inp = $('#ed_' + k);
+      if (!inp) return;
+      inp.oninput = function () {
+        v[k] = this.value;
+        var antes = ed.sucio;
+        ed.sucio = diferenciasTarea(t, v);
+        if (antes !== ed.sucio) {
+          // Mostrar u ocultar la barra de Guardar/Descartar sin perder el foco
+          var pos = this.selectionStart;
+          pintarDetalle(t.id);
+          var nuevoInp = $('#ed_' + k);
+          if (nuevoInp) { nuevoInp.focus(); try { nuevoInp.setSelectionRange(pos, pos); } catch (e) {} }
+        }
+      };
+      if (k === 'titulo' || k === 'lugar') {
+        inp.onkeydown = function (ev) {
+          if (ev.key === 'Enter') { ev.preventDefault(); v[k] = this.value; ed.campo = null; pintarDetalle(t.id); }
+        };
+      }
+    });
+    if ($('#ed_prio')) $('#ed_prio').onclick = function (ev) {
+      var b = ev.target.closest('button[data-p]'); if (!b) return;
+      v.prioridad = b.dataset.p;
+      ed.sucio = diferenciasTarea(t, v);
+      pintarDetalle(t.id);
+    };
+    if ($('#ed_urg')) $('#ed_urg').onchange = function () {
+      v.urgente = this.checked;
+      ed.sucio = diferenciasTarea(t, v);
+      pintarDetalle(t.id);
+    };
+
+    if ($('#dDescartar')) $('#dDescartar').onclick = function () {
+      S.detEdit = null;
+      pintarDetalle(t.id);
+    };
+    if ($('#dGuardar')) $('#dGuardar').onclick = function () {
+      recogerCampoActivo();
+      v.titulo = String(v.titulo || '').trim();
+      if (!v.titulo) {
+        ed.campo = 'titulo';
+        pintarDetalle(t.id);
+        if ($('#dError')) $('#dError').textContent = 'Escribe el título de la tarea.';
+        if ($('#ed_titulo')) $('#ed_titulo').focus();
+        return;
+      }
+      v.lugar = String(v.lugar || '').trim();
+      v.descripcion = String(v.descripcion || '').trim();
+      v.notas = String(v.notas || '').trim();
+      var respAntes = t.responsable || '';
+      var pedirWa = !!(v.responsable && v.responsable !== S.quien && v.responsable !== respAntes);
+      guardar('guardarTarea', { tarea: v }, 'Cambios guardados').then(function () {
+        S.detEdit = null;
+        pintarDetalle(t.id);
+        if (pedirWa) modalAvisoGuardado(t.id, function () { pintarDetalle(t.id); });
+      }, function (e) { if (e && e.message !== 'sin conexión' && $('#dError')) $('#dError').textContent = e.message; });
+    };
+
     $('#dEstado').onclick = function (e) {
       var b = e.target.closest('button'); if (!b || b.dataset.e === t.estado) return;
-      guardar('cambiarEstado', { id: t.id, estado: b.dataset.e }, 'Estado: ' + b.dataset.e).then(function () { pintar(); }, function () {});
+      recogerCampoActivo();
+      guardar('cambiarEstado', { id: t.id, estado: b.dataset.e }, 'Estado: ' + b.dataset.e).then(function () {
+        if (S.detEdit && S.detEdit.id === t.id) S.detEdit.v.estado = b.dataset.e;
+        pintar();
+      }, function () {});
     };
     enlazarSelectorFotosTarea(t);
     enlazarSeguimiento(t);
     enlazarFotos(vista);
-    $('#dEditar').onclick = function () { ir('editar/' + encodeURIComponent(t.id)); };
     $('#dBorrar').onclick = function () {
       confirmar('¿Borrar «' + esc(t.titulo) + '»? No se puede deshacer. Si ya está resuelta, mejor márcala como <b>Hecha</b> para que quede en el historial.', 'Borrar', true).then(function (ok) {
         if (!ok) return;
+        S.detEdit = null;
         guardar('borrarTarea', { id: t.id }, 'Borrada').then(function () { ir('lista'); }, function () {});
       });
     };
@@ -690,56 +939,18 @@
       $$('#ftTareas .fila-tarea').forEach(function (l) { l.hidden = q && l.dataset.txt.indexOf(q) < 0; });
     };
   }
-  /** Selector de fotos (punto 5 de D23): «Subir desde la galería» principal, «Hacer foto» al lado y «Ya en la app» debajo. */
-  function fotosDisponiblesRepo(excluirIds) {
-    var ex = excluirIds || [];
-    var disp = fotos().filter(function (f) { return !f.archivada && ex.indexOf(f.id) < 0; });
-    return disp.filter(function (f) { return grupoFoto(f) === 'sin'; }).concat(disp.filter(function (f) { return grupoFoto(f) !== 'sin'; }));
-  }
-  function marcaFotoRepo(f) {
-    var n = f.tareas.filter(function (x) { return tarea(x); }).length;
-    return n ? 'En ' + n + (n === 1 ? ' tarea' : ' tareas') : 'Sin asignar';
-  }
-  function htmlSelectorFotos(pref, excluirIds) {
-    var disp = fotosDisponiblesRepo(excluirIds);
+  /** Selector de fotos (D25): solo «Subir desde la galería» (principal) y «Hacer foto», sin «Ya en la app» ni «Del repositorio». */
+  function htmlSelectorFotos(pref) {
     return '<div class="sel-fotos-acc">' +
       '<button type="button" class="btn btn-gal-pri" id="' + pref + 'Gal">' + ICO.galeria + 'Subir desde la galería</button>' +
-      '<button type="button" class="btn sec mini btn-cam-sec" id="' + pref + 'Cam">' + ICO.camara + 'Hacer foto</button></div>' +
-      (disp.length ? '<div class="enc-ya-app">Ya en la app</div><div class="rejilla-fotos elegir" id="' + pref + 'Repo">' + disp.map(function (f) {
-        return '<button type="button" class="mini-foto" data-elegir="' + esc(f.id) + '">' + htmlImg(f.id) +
-          '<span class="pie">' + esc(marcaFotoRepo(f)) + '</span><span class="marca">✓</span></button>';
-      }).join('') + '</div>' : '');
-  }
-  function modalElegirFotos(tid) {
-    var yaEnTarea = fotosDe(tid).map(function (f) { return f.id; });
-    var sel = [];
-    modal('<h2>Añadir fotos a la tarea</h2>' +
-      htmlSelectorFotos('el', yaEnTarea) +
-      '<div class="fila-btns"><button class="btn borde" data-r="0">Cancelar</button><button class="btn" data-r="1" id="elOk" disabled>Añadir</button></div>',
-      function (ev, cerrar) {
-        var e = ev.target.closest('[data-elegir]');
-        if (e) {
-          var i = sel.indexOf(e.dataset.elegir);
-          if (i < 0) sel.push(e.dataset.elegir); else sel.splice(i, 1);
-          e.classList.toggle('sel', i < 0);
-          $('#elOk').disabled = !sel.length; $('#elOk').textContent = sel.length ? 'Añadir (' + sel.length + ')' : 'Añadir';
-          return;
-        }
-        var b = ev.target.closest('[data-r]'); if (!b) return;
-        if (b.dataset.r === '0') return cerrar();
-        guardar('fotosATarea', { tareaId: tid, fotos: sel }, sel.length === 1 ? 'Foto añadida' : sel.length + ' fotos añadidas').then(function () { cerrar(); pintar(); }, function () {});
-      });
-    if ($('#elGal')) $('#elGal').onclick = function () { cerrarModal(); elegirArchivos(false, true).then(function (a) { return subirFotos(a, tid); }).then(function (ids) { if (ids.length) pintar(); }); };
-    if ($('#elCam')) $('#elCam').onclick = function () { cerrarModal(); elegirArchivos(true, false).then(function (a) { return subirFotos(a, tid); }).then(function (ids) { if (ids.length) pintar(); }); };
-    activarImagenes($('#modal'));
+      '<button type="button" class="btn sec mini btn-cam-sec" id="' + pref + 'Cam">' + ICO.camara + 'Hacer foto</button></div>';
   }
   function bloqueFotosTarea(t) {
     var fs = fotosDe(t.id);
-    var idsYa = fs.map(function (f) { return f.id; });
     return '<div class="tarjeta"><h2 class="con-num">Fotos<small>' + fs.length + '</small></h2>' +
       (fs.length ? '<div class="tira-fotos">' + fs.map(function (f) { return '<button class="mini-foto" data-ver="' + esc(f.id) + '">' + htmlImg(f.id) + '</button>'; }).join('') + '</div>'
         : '<p class="sub" style="margin:0 0 10px">Sin fotos todavía.</p>') +
-      htmlSelectorFotos('dFoto', idsYa) + '</div>';
+      htmlSelectorFotos('dFoto') + '</div>';
   }
   function enlazarSelectorFotosTarea(t) {
     if ($('#dFotoGal')) $('#dFotoGal').onclick = function () {
@@ -748,11 +959,6 @@
     if ($('#dFotoCam')) $('#dFotoCam').onclick = function () {
       elegirArchivos(true, false).then(function (a) { return subirFotos(a, t.id); }).then(function (ids) { if (ids.length) pintar(); });
     };
-    $$('#dFotoRepo [data-elegir]', vista).forEach(function (b) {
-      b.onclick = function () {
-        guardar('fotosATarea', { tareaId: t.id, fotos: [b.dataset.elegir] }, 'Foto añadida').then(function () { pintar(); }, function () {});
-      };
-    });
   }
 
   // ---------------- Seguimiento (avances de cada tarea, plegados por día) ----------------
@@ -849,7 +1055,7 @@
       });
   }
 
-  // ---------------- Formulario (nueva / editar) ----------------
+  // ---------------- Formulario (nueva) ----------------
   function pintarFotosFormNueva() {
     var cont = $('#nFotosCont'); if (!cont) return;
     var elegidas = (S.nuevasFotos || []).filter(function (fid) { return foto(fid); });
@@ -857,8 +1063,8 @@
     cont.innerHTML = '<h2 class="con-num">Fotos<small>' + elegidas.length + '</small></h2>' +
       (elegidas.length ? '<div class="tira-fotos" id="nFotosTira">' + elegidas.map(function (fid) {
         return '<span class="mini-foto">' + htmlImg(fid) + '<button type="button" class="quitar" data-quitar-nueva="' + esc(fid) + '" aria-label="Quitar">×</button></span>';
-      }).join('') + '</div>' : '<p class="sub" style="margin:0 0 10px">Sin fotos seleccionadas.</p>') +
-      htmlSelectorFotos('nFoto', elegidas);
+      }).join('') + '</div>' : '<p class="sub" style="margin:0 0 10px">Sin fotos todavía.</p>') +
+      htmlSelectorFotos('nFoto');
     $$('[data-quitar-nueva]', cont).forEach(function (b) {
       b.onclick = function () {
         S.nuevasFotos = S.nuevasFotos.filter(function (x) { return x !== b.dataset.quitarNueva; });
@@ -879,18 +1085,11 @@
         pintarFotosFormNueva();
       });
     };
-    $$('#nFotoRepo [data-elegir]', cont).forEach(function (b) {
-      b.onclick = function () {
-        var fid = b.dataset.elegir;
-        if (S.nuevasFotos.indexOf(fid) < 0) S.nuevasFotos.push(fid);
-        pintarFotosFormNueva();
-      };
-    });
     activarImagenes(cont);
   }
   function pintarFormulario(id) {
     var t = id ? tarea(id) : null;
-    if (id && !t) { vista.innerHTML = botonVolver() + '<div class="vacio">Esta necesidad ya no existe.</div>'; return enlazarVolver(); }
+    if (id && !t) { vista.innerHTML = botonVolver() + '<div class="vacio">Esta tarea ya no existe.</div>'; return enlazarVolver(); }
     if (!t) S.nuevasFotos = [];
     var v = t ? JSON.parse(JSON.stringify(t)) : { titulo: '', espacioId: S.f.esp || '', categoriaId: S.f.cat || '', lugar: '', prioridad: 'Media', urgente: false, estado: 'Pendiente', responsable: '', limite: '', descripcion: '', notas: '' };
     var resp = lista('responsables').filter(function (r) { return r.activo || r.nombre === v.responsable; }).map(function (r) { return r.nombre; });
@@ -1107,7 +1306,7 @@
       '<label class="campo"><span>Nombre *</span><input class="entrada" id="eNombre" maxlength="80" value="' + esc(e.nombre) + '"></label>' +
       (L.extra ? '<div class="dos"><label class="campo"><span>Código</span><input class="entrada" id="eCodigo" maxlength="40" placeholder="Ej.: P1-12" value="' + esc(e.codigo) + '"></label>' +
         '<label class="campo"><span>Zona / planta</span><input class="entrada" id="eZona" maxlength="40" placeholder="Ej.: Planta 1" value="' + esc(e.zona) + '"></label></div>' : '') +
-      '<label class="check"><input type="checkbox" id="eActivo"' + (e.activo ? ' checked' : '') + '> Activo (aparece al apuntar necesidades)</label>' +
+      '<label class="check"><input type="checkbox" id="eActivo"' + (e.activo ? ' checked' : '') + '> Activo (aparece al apuntar tareas)</label>' +
       '<p class="error-txt" id="eError"></p>' +
       '<div class="fila-btns"><button class="btn borde" data-r="0">Cancelar</button><button class="btn" data-r="1">Guardar</button></div>',
       function (ev, cerrar) {
@@ -1143,7 +1342,7 @@
     var aj = S.datos.ajustes || {};
     vista.innerHTML =
       '<div class="tarjeta"><h2>Sesión</h2><div class="dato"><span>Tu nombre</span><span><b>' + esc(S.quien) + '</b></span></div>' +
-      '<p class="sub" style="margin:10px 0 0">Queda anotado en cada necesidad que apuntes o cambies. Para entrar como otra persona, cierra la sesión.</p></div>' +
+      '<p class="sub" style="margin:10px 0 0">Queda anotado en cada tarea que apuntes o cambies. Para entrar como otra persona, cierra la sesión.</p></div>' +
       '<h3>Listas</h3>' + Object.keys(LISTAS).map(htmlLista).join('') +
       (DEMO ? '<details class="tarjeta mant"><summary>Demostración</summary><button class="btn borde ancho" id="aReiniciar">Reiniciar demostración</button></details>' : '') +
       '<button class="btn peligro ancho" id="aSalir">Cerrar sesión en este móvil</button>' +
@@ -1210,7 +1409,9 @@
   }
   function modalImprimir() {
     var pref = lsGet('pdfOpciones') || {};
-    var crit = CRITERIOS_PDF.some(function (c) { return c.id === pref.criterio; }) ? pref.criterio : 'importancia';
+    var critActual = S.f && S.f.agrupar;
+    var crit = CRITERIOS_PDF.some(function (c) { return c.id === critActual; }) ? critActual
+      : (CRITERIOS_PDF.some(function (c) { return c.id === pref.criterio; }) ? pref.criterio : 'importancia');
     var inc = INCLUIR_PDF.some(function (i) { return i.id === pref.incluir; }) ? pref.incluir : 'pendientes';
     var conNotas = !!pref.notas;
     var numLineas = [1, 2, 3].indexOf(Number(pref.lineas)) >= 0 ? Number(pref.lineas) : 2;

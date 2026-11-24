@@ -128,15 +128,21 @@ body[data-vista="login"] main { display: flex; flex-direction: column; justify-c
 .aviso-asig b { font-weight: 700; }
 .aviso-asig small { background: var(--mor); color: #fff; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; white-space: nowrap; }
 
-/* ---------- Tarjetas de tarea y grupos por importancia (D23) ---------- */
-.grupo-tareas { margin-bottom: 14px; }
-.enc-grupo { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; color: var(--texto-2); margin: 14px 2px 6px; }
-.enc-grupo:first-of-type { margin-top: 4px; }
-.enc-grupo.urgente { color: var(--tel); }
-.enc-grupo.alta { color: var(--pri); }
-.enc-grupo small { background: var(--pas-suave); color: #3F444B; border-radius: 999px; padding: 1px 9px; font-size: 12px; font-weight: 700; }
-.enc-grupo.urgente small { background: var(--tel-suave); color: var(--tel); }
-.enc-grupo.alta small { background: var(--pri-suave); color: var(--pri); }
+/* ---------- Tarjetas de tarea y grupos plegables (D23 / D25) ---------- */
+.grupos-lista { margin-top: 6px; }
+details.grupo-lista { background: var(--tarjeta); border: 1px solid var(--linea); border-radius: var(--radio); box-shadow: var(--sombra); margin-bottom: 8px; }
+details.grupo-lista > summary { list-style: none; display: flex; align-items: center; gap: 10px; padding: 13px 16px; font-weight: 700; font-size: 15.5px; cursor: pointer; }
+details.grupo-lista > summary::-webkit-details-marker { display: none; }
+details.grupo-lista > summary span { flex: 1; min-width: 0; }
+details.grupo-lista > summary small { background: var(--pri-suave); color: var(--pri); border-radius: 999px; padding: 2px 9px; font-size: 12.5px; font-weight: 700; }
+details.grupo-lista.urgente > summary { color: var(--tel); }
+details.grupo-lista.urgente > summary small { background: var(--tel-suave); color: var(--tel); }
+details.grupo-lista.alta > summary { color: var(--pri); }
+details.grupo-lista > summary::after { content: '\203a'; font-size: 24px; line-height: 1; color: var(--texto-2); transform: rotate(90deg); transition: transform .2s; }
+details.grupo-lista[open] > summary::after { transform: rotate(-90deg); }
+details.grupo-lista[open] > summary { border-bottom: 1px solid var(--linea); }
+.grupo-lista-cuerpo { padding: 8px; background: #FAF7F4; border-radius: 0 0 var(--radio) var(--radio); }
+.grupo-lista-cuerpo .tarea:last-of-type { margin-bottom: 0; }
 .tarea { display: flex; gap: 10px; align-items: stretch; width: 100%; text-align: left; padding: 12px 14px;
   background: #fff; border: 1.5px solid var(--linea); border-radius: 0; margin: 0;
   box-shadow: inset 5px 0 0 var(--ambar); }
@@ -185,6 +191,32 @@ body[data-vista="login"] main { display: flex; flex-direction: column; justify-c
 .det-acc .btn.mini { min-height: 34px; padding: 5px 11px; font-size: 13px; border-radius: 10px; }
 .det-acc .btn.peligro.discreto { min-height: 32px; padding: 4px 9px; font-size: 12px; gap: 4px; background: var(--error-suave); color: var(--error); }
 .det-acc .btn.peligro.discreto svg { width: 15px; height: 15px; }
+.det-tit-btn { flex: 1; min-width: 0; background: none; border: 1.5px solid transparent; border-radius: 10px; padding: 3px 6px; margin: -3px -6px; text-align: left; font-size: 20px; font-weight: 700; color: var(--texto); display: flex; align-items: baseline; justify-content: space-between; gap: 6px; }
+.det-tit-btn:hover, .det-tit-btn:focus-visible { background: #FAF7F4; border-color: var(--linea); outline: none; }
+.det-tit-btn small { font-size: 12px; color: var(--texto-2); font-weight: 400; opacity: .65; flex: 0 0 auto; }
+.det-tit-in { flex: 1; min-width: 0; font-size: 19px; font-weight: 700; padding: 6px 10px; min-height: 40px; }
+.dato.editable { align-items: center; cursor: pointer; border-radius: 8px; padding: 8px 6px; margin: 0 -6px; position: relative; }
+.dato.editable:hover, .dato.editable:focus-within { background: #FAF7F4; }
+.dato.editable .val { display: inline-flex; align-items: center; gap: 6px; justify-content: flex-end; text-align: right; font-weight: 600; color: var(--texto); min-width: 0; }
+.dato.editable .val.vacio-val { color: var(--texto-2); font-weight: 400; font-style: italic; }
+.dato.editable .lapiz { font-size: 12px; color: var(--texto-2); opacity: .55; font-weight: 400; }
+.dato.editable select.in-linea, .dato.editable input.in-linea { border: 1.5px solid var(--pri-2); border-radius: 9px; padding: 5px 8px; background: #fff; font-size: 15px; font-weight: 600; max-width: 65%; min-height: 36px; }
+.prio-inline { padding: 8px 0; border-bottom: 1px solid var(--linea); }
+.prio-inline .fila-prio { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.prio-inline .segmento { flex: 1; }
+.prio-inline .urg-chip { display: inline-flex; align-items: center; gap: 6px; border: 1.5px solid #C9BDB4; border-radius: 10px; padding: 8px 10px; background: #fff; font-size: 13.5px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.prio-inline .urg-chip input { width: 18px; height: 18px; accent-color: var(--tel); margin: 0; }
+.prio-inline .urg-chip.on { border-color: var(--tel); background: var(--tel-suave); color: var(--tel); }
+.bloque-ed { margin-top: 10px; padding: 6px 8px; margin-left: -8px; margin-right: -8px; border-radius: 10px; cursor: pointer; border: 1.5px solid transparent; }
+.bloque-ed:hover { background: #FAF7F4; border-color: var(--linea); }
+.bloque-ed h3 { margin: 0 0 3px; display: flex; align-items: center; justify-content: space-between; }
+.bloque-ed h3 small { font-size: 11px; text-transform: none; letter-spacing: 0; font-weight: 400; opacity: .65; }
+.bloque-ed .vacio-bloque { color: var(--texto-2); font-size: 14px; font-style: italic; margin: 0; }
+.bloque-ed textarea.entrada { margin-top: 4px; }
+.pie-cambios { position: sticky; bottom: 0; z-index: 20; background: var(--tarjeta); border-top: 2px solid var(--pri);
+  margin: 10px -16px -16px; padding: 10px 16px; display: flex; gap: 10px; box-shadow: 0 -4px 14px rgba(0,0,0,.1); border-radius: 14px 14px 0 0; }
+.pie-cambios .btn { flex: 1; }
+@media (min-width: 752px) { .pie-cambios { margin: 10px 0 0; } }
 .texto-largo { white-space: pre-wrap; margin: 4px 0 0; }
 .estado-rapido .segmento button.activo.e-pendiente { background: var(--pri); color: #fff; }
 .estado-rapido .segmento button.activo.e-encurso { background: var(--dia); color: #fff; }
